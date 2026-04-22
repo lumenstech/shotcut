@@ -3,9 +3,21 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -206,4 +218,44 @@ class OrchestratorState(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FinancialFact(Base):
+    """Stage 7 cache of SEC EDGAR-sourced financial facts.
+
+    One row per `(cik, statement, period, metric)` quadruple. Provenance
+    is preserved (accession + filing type + url) so workbook cells that
+    reference a fact can cite the source. See
+    docs/decisions/0004-research-integration.md.
+    """
+
+    __tablename__ = "financial_facts"
+    __table_args__ = (
+        UniqueConstraint(
+            "cik", "statement", "period", "metric", name="uq_financial_facts_key"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    cik: Mapped[str] = mapped_column(String(16), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    statement: Mapped[str] = mapped_column(String(32))
+    period: Mapped[str] = mapped_column(String(32))
+    metric: Mapped[str] = mapped_column(String(128))
+    value: Mapped[Decimal] = mapped_column(Numeric(30, 10))
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Provenance — required so citations survive round-trip.
+    filing_accession: Mapped[str] = mapped_column(String(64))
+    filing_type: Mapped[str] = mapped_column(String(16))
+    filing_url: Mapped[str] = mapped_column(String(512))
+    # Cache metadata. expires_at=None means "never expires" (reserved
+    # for Stage 10's immutable-prior-period optimization).
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
     )
