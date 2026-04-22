@@ -151,14 +151,18 @@ async def verify(
 def attribute_to_actions(
     findings: list[VerifierFinding],
     pending_actions: list[AgentAction],
-    action_id_map: dict[int, uuid.UUID],
+    row_id_by_client_id: dict[uuid.UUID, uuid.UUID],
 ) -> dict[uuid.UUID, list[VerifierFinding]]:
     """Map each finding to the pending Action (by audit row id) whose
     target range contains the finding's cell.
 
-    `action_id_map` keys by `id(action)` in `pending_actions` because
-    the domain Action objects don't carry their row id. Caller builds
-    this map from the paired list of (db_row, domain_action).
+    Keyed on the domain Action's `client_action_id`, which is stable
+    across serialization and Stage 5 branches. Python `id()` is NOT
+    stable across those boundaries and was replaced by the Stage 5
+    erratum (see docs/decisions/0002-schema-consolidation.md).
+
+    `row_id_by_client_id` is built by the caller from the paired list
+    of (domain_action, db_row): `{a.client_action_id: row.id for ...}`.
     """
     out: dict[uuid.UUID, list[VerifierFinding]] = defaultdict(list)
     for finding in findings:
@@ -166,7 +170,7 @@ def attribute_to_actions(
             continue
         for action in pending_actions:
             if _action_touches(action, finding.sheet, finding.cell):
-                row_id = action_id_map.get(id(action))
+                row_id = row_id_by_client_id.get(action.client_action_id)
                 if row_id is not None:
                     out[row_id].append(finding)
                 break

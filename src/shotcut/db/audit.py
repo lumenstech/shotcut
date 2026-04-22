@@ -32,6 +32,9 @@ async def record(
     row = Action(
         session_id=session_id,
         sequence=next_seq,
+        # Persist the domain Action's client_action_id so it survives
+        # reconstruction (row_to_action) and branching (Stage 5).
+        client_action_id=action.client_action_id,
         agent=agent,
         action_type=action.type,
         sheet=action.sheet,

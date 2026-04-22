@@ -37,15 +37,18 @@ def _make_config(db_url: str) -> Config:
 # ---------------------------------------------------------------------------
 
 
-def test_revision_chain_has_one_head() -> None:
-    """Stage 3 is the first migration — exactly one head, no parent."""
+def test_revision_chain_is_linear() -> None:
+    """Stage 3 (0001) → Stage 5 erratum (0002). Single linear chain, one head."""
     cfg = _make_config("sqlite://")
     scripts = ScriptDirectory.from_config(cfg)
-    revisions = list(scripts.walk_revisions())
-    assert len(revisions) == 1
-    head = revisions[0]
-    assert head.revision == "0001"
-    assert head.down_revision is None
+    revisions = {r.revision: r for r in scripts.walk_revisions()}
+    assert set(revisions) == {"0001", "0002"}
+    assert revisions["0001"].down_revision is None
+    assert revisions["0002"].down_revision == "0001"
+    # Exactly one head.
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    assert heads[0] == "0002"
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +84,8 @@ def test_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch: pytest.Mon
         "sheet", "target_range", "previous_value", "new_value", "reasoning",
         "created_at", "status", "approval_required_reason", "force_override",
         "parent_action_id", "tenant_id", "user_sub",
+        # Stage 5 erratum.
+        "client_action_id",
     }
     missing = required - action_cols
     assert not missing, f"actions table missing columns: {missing}"
@@ -94,6 +99,7 @@ def test_upgrade_creates_expected_schema(tmp_path: Path, monkeypatch: pytest.Mon
     assert "ix_actions_parent_action_id" in action_indexes
     assert "ix_actions_status" in action_indexes
     assert "ix_actions_tenant_id" in action_indexes
+    assert "ix_actions_client_action_id" in action_indexes
 
     session_indexes = {ix["name"] for ix in inspector.get_indexes("sessions")}
     assert "ix_sessions_original_workbook_path" in session_indexes
@@ -129,3 +135,61 @@ def test_downgrade_then_upgrade_round_trips(
     inspector = inspect(engine)
     assert set(inspector.get_table_names()) >= {"sessions", "actions"}
     engine.dispose()
+
+
+def test_stage5_erratum_backfills_existing_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage 5 erratum (0002) runs cleanly on a Stage-3/4 populated DB.
+
+    Seeds Stage 3 (0001) state with action rows lacking `client_action_id`,
+    then applies 0002 and asserts every row got a unique non-null UUID.
+    """
+    from shotcut.config import settings
+    from sqlalchemy import text
+
+    url = _sync_sqlite_url(tmp_path)
+    monkeypatch.setattr(settings, "database_url", url)
+
+    cfg = _make_config(url)
+    # Stop at 0001 so the table is in the pre-erratum shape.
+    command.upgrade(cfg, "0001")
+
+    engine = create_engine(url)
+    session_id = "00000000-0000-0000-0000-000000000001"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO sessions (id, workbook_path) VALUES (:id, :wp)"
+            ),
+            {"id": session_id, "wp": "/tmp/wb.xlsx"},
+        )
+        for i in range(5):
+            conn.execute(
+                text(
+                    "INSERT INTO actions "
+                    "(id, session_id, sequence, agent, action_type, status, force_override) "
+                    "VALUES (:id, :sid, :seq, 'executor', 'write_value', 'applied', 0)"
+                ),
+                {
+                    "id": f"00000000-0000-0000-0000-00000000000{i + 2}",
+                    "sid": session_id,
+                    "seq": i + 1,
+                },
+            )
+    engine.dispose()
+
+    # Apply the erratum migration on top of the populated DB.
+    command.upgrade(cfg, "0002")
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT id, client_action_id FROM actions ORDER BY sequence")
+        ).fetchall()
+    engine.dispose()
+
+    assert len(rows) == 5
+    ids = {r[1] for r in rows}
+    assert len(ids) == 5, "backfilled client_action_ids must be unique per row"
+    assert all(r[1] is not None for r in rows), "every row must have a non-null backfill"

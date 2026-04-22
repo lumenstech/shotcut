@@ -126,7 +126,10 @@ async def run(
         await db.commit()
 
     pending_domain = [dom for dom, _ in pending_pairs]
-    action_id_map = {id(dom): row.id for dom, row in pending_pairs}
+    # Key attribution on `client_action_id` (domain-owned, stable across
+    # serialization and branches) rather than Python's id(). See Stage 5
+    # erratum in docs/decisions/0002-schema-consolidation.md.
+    row_id_by_client_id = {dom.client_action_id: row.id for dom, row in pending_pairs}
     rows_by_id = {row.id: row for _, row in pending_pairs}
 
     log.info("verifier: running 5-level pipeline (pending=%d)", len(pending_domain))
@@ -144,7 +147,7 @@ async def run(
     # they target, and append to the action's reasoning. Status does NOT
     # change — verifier is informational for pending actions, not a gate.
     attributions = verifier.attribute_to_actions(
-        report.critical, pending_domain, action_id_map
+        report.critical, pending_domain, row_id_by_client_id
     )
     for action_id, findings in attributions.items():
         # Different name from the `row` used earlier in the turn's audit

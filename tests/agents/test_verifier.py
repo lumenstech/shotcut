@@ -305,11 +305,12 @@ async def test_pending_action_finding_is_attributed(tmp_path: Path, monkeypatch)
     wb2 = _build(tmp_path, build)
     value_error = WriteFormula(sheet="Sheet1", target="C1", formula="=A1/\"x\"")
     row_id = uuid.uuid4()
-    action_id_map = {id(value_error): row_id}
+    # Stage 5 erratum: attribution is keyed on client_action_id, not id().
+    row_id_map = {value_error.client_action_id: row_id}
 
     report2 = await verify(wb2, prompt="test", pending_actions=[value_error])
     critical = report2.critical
-    attrib = attribute_to_actions(critical, [value_error], action_id_map)
+    attrib = attribute_to_actions(critical, [value_error], row_id_map)
     if critical:
         # If formualizer classified this as critical, attribution must
         # surface it against the action row.

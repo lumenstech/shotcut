@@ -4,15 +4,24 @@ Each action is an atomic mutation the orchestrator applies to a workbook and
 records in the audit log. Actions are intentionally narrow — the executor
 works at the level of a single cell or range, and the LLM emits them via
 tool use.
+
+`client_action_id` is the stable identity of a logical action across
+processes, replays, and Stage 5 branches — see
+docs/decisions/0002-schema-consolidation.md → "Stage 5 erratum". It
+defaults to a fresh UUID at construction; callers can pass one explicitly
+to preserve identity across a serialize/deserialize round-trip (e.g.
+when the orchestrator reconstructs actions from DB rows for replay).
 """
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
 
 class _Base(BaseModel):
+    client_action_id: UUID = Field(default_factory=uuid4)
     sheet: str
     target: str  # A1 reference or range, e.g. "B2" or "A1:D10"
 
@@ -35,6 +44,7 @@ class FormatCell(_Base):
 
 
 class AddSheet(BaseModel):
+    client_action_id: UUID = Field(default_factory=uuid4)
     type: Literal["add_sheet"] = "add_sheet"
     sheet: str
     target: str = "A1"  # unused; kept for uniform logging
