@@ -46,8 +46,16 @@ class Workbook:
         self._engine: Engine | None = None
 
     @classmethod
-    def load(cls, path: Path) -> Workbook:
-        return cls(load_workbook(path))
+    def from_xlsx(cls, path: Path) -> Workbook:
+        """Load a workbook from an .xlsx file preserving formulas and structure.
+
+        `data_only=False` keeps formulas as formulas rather than replacing
+        them with their cached evaluated values — a silent-data-loss trap
+        if openpyxl's default ever flips. Callers who want rich metadata
+        (named ranges, merges, validations) should use `parser.parse()`
+        instead; this classmethod is the minimal constructor.
+        """
+        return cls(load_workbook(path, data_only=False, keep_vba=True, keep_links=True))
 
     @classmethod
     def blank(cls) -> Workbook:

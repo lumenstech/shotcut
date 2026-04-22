@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from shotcut.agents.planner import Plan
 from shotcut.agents.verifier import VerificationReport
+from shotcut.spreadsheet.parser import ParseMetadata
 
 
 class SessionCreateResponse(BaseModel):
@@ -42,3 +43,9 @@ class ActionOut(BaseModel):
 class AuditResponse(BaseModel):
     session_id: uuid.UUID
     actions: list[ActionOut]
+
+
+class UploadResponse(BaseModel):
+    session_id: uuid.UUID
+    size_bytes: int
+    metadata: ParseMetadata

@@ -22,7 +22,7 @@ def test_apply_and_roundtrip(tmp_path: Path):
     path = tmp_path / "out.xlsx"
     wb.save(path)
 
-    reloaded = Workbook.load(path)
+    reloaded = Workbook.from_xlsx(path)
     summary = reloaded.summary()
     model_sheet = next(s for s in summary["sheets"] if s["name"] == "Model")
     values = {c["ref"]: c["value"] for c in model_sheet["cells"]}

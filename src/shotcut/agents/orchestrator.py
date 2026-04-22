@@ -42,7 +42,7 @@ async def run(
     prompt: str,
     input_path: Path | None,
 ) -> RunResult:
-    workbook = Workbook.load(input_path) if input_path else Workbook.blank()
+    workbook = Workbook.from_xlsx(input_path) if input_path else Workbook.blank()
 
     log.info("planner: starting for session=%s", session_id)
     plan = await planner.plan(prompt, workbook.summary())

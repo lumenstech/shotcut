@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     storage_dir: Path = Field(Path("./storage"), alias="STORAGE_DIR")
     edgar_identity: str = Field("shotcut-dev dev@example.com", alias="EDGAR_IDENTITY")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
+    max_upload_mb: int = Field(50, alias="MAX_UPLOAD_MB")
 
 
 # Pydantic-settings reads all fields from env/.env; mypy's strict mode
