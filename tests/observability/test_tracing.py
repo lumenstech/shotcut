@@ -101,7 +101,10 @@ def test_contextvar_propagates_through_await(
         with start_span("parent"):
             await inner()
 
-    asyncio.get_event_loop().run_until_complete(driver())
+    # `asyncio.run` (not `get_event_loop().run_until_complete`) — the
+    # latter is deprecated on 3.10+ and fails intermittently after
+    # other tests close the main-thread loop.
+    asyncio.run(driver())
     parent = next(s for s in _reset_tracer.spans if s.name == "parent")
     child = next(s for s in _reset_tracer.spans if s.name == "child")
     assert child.parent_id == parent.id
@@ -120,7 +123,7 @@ def test_concurrent_coroutines_get_isolated_span_trees(
     async def driver() -> None:
         await asyncio.gather(worker("a"), worker("b"))
 
-    asyncio.get_event_loop().run_until_complete(driver())
+    asyncio.run(driver())
     roots = {s.name: s for s in _reset_tracer.spans if s.name.startswith("root.")}
     children = {s.name: s for s in _reset_tracer.spans if s.name.startswith("child.")}
     assert children["child.a"].parent_id == roots["root.a"].id

@@ -2,9 +2,11 @@
 
 Invoked by `.github/workflows/evals.yml`. Two modes:
 
-  - `golden` — runs the committed golden set via a deterministic
-    test producer (no Anthropic calls). Pass with `--gate` to enforce
-    the regression rule (`GoldenFailure` → exit 1).
+  - `golden` — runs the committed golden set via the recorded-trace
+    producer (loads cassettes from `evals/recording/cassettes/`).
+    Missing cassettes are a hard error: drift between `golden/cases.py`
+    and the cassette directory is never silent. Pass with `--gate` to
+    enforce the regression rule (`GoldenFailure` → exit 1).
   - `spreadsheetbench` — runs a dataset manifest from
     `SPREADSHEETBENCH_DATASET` (default: built-in test fixture) with a
     subset size from `SPREADSHEETBENCH_MAX_CASES`. Also supports `--gate`.
@@ -24,32 +26,19 @@ from pathlib import Path
 
 from evals import regression
 from evals.golden.cases import CASES as GOLDEN_CASES
+from evals.recording import CassetteMissing, recorded_trace_producer
 from evals.results.schema import SuiteResult
-from evals.runner import EvalCase, Producer, run_suite
+from evals.runner import Producer, run_case
 from evals.spreadsheet_bench import runner as sb_runner
 from shotcut.spreadsheet.workbook import Workbook
 
 
-def _identity_producer_for(cases: list[EvalCase]) -> Producer:
-    """Build a prompt-keyed producer that returns each case's expected
-    workbook.
-
-    This is the MVP scaffold's deterministic producer: it exercises the
-    framework end-to-end (traces, scoring, regression gate) on every
-    committed golden case without hitting Anthropic. The cases pass
-    trivially because the actual workbook is the expected workbook —
-    so CI protects baseline-drift (a case disappearing, a prompt
-    changing) without protecting agent output (which needs a recorded-
-    trace producer, a Stage 10+ follow-up).
-    """
-    prompt_to_expected = {c.prompt: c.expected for c in cases}
-
-    async def producer(prompt: str) -> Workbook:
-        if prompt in prompt_to_expected:
-            return prompt_to_expected[prompt]
-        # Unknown prompt (e.g. a SpreadsheetBench case without a
-        # recorded trace): return an empty workbook so the case fails
-        # scoring loudly instead of silently passing.
+def _empty_producer() -> Producer:
+    """Producer used by the SpreadsheetBench CI path when no cassettes
+    exist: returns a blank workbook so every case fails scoring loudly.
+    Production weekly cron replaces this with a real orchestrator
+    producer against live Anthropic."""
+    async def producer(_prompt: str) -> Workbook:
         from openpyxl import Workbook as OpenpyxlWorkbook
 
         return Workbook(OpenpyxlWorkbook())
@@ -58,10 +47,37 @@ def _identity_producer_for(cases: list[EvalCase]) -> Producer:
 
 
 async def _run_golden() -> SuiteResult:
-    producer = _identity_producer_for(GOLDEN_CASES)
-    results = await run_suite(
-        GOLDEN_CASES, suite="golden", producer=producer
-    )
+    """Run each golden case through its committed cassette.
+
+    A missing cassette surfaces as a verdict=`errored` row so the gate
+    fails the PR with a message pointing at the drift. This keeps the
+    golden set / cassette directory / baseline.json in lockstep via
+    the CI gate rather than trusting authors to remember the 3-file
+    commit."""
+    results = []
+    for case in GOLDEN_CASES:
+        try:
+            producer = recorded_trace_producer(case.case_id)
+        except CassetteMissing as exc:
+            # Emit a synthetic errored row so the report carries the
+            # failure reason; regression.check_golden will treat it as
+            # a regression against baseline's `passed` verdict.
+            from evals.results.schema import CaseResult
+
+            results.append(
+                CaseResult(
+                    case_id=case.case_id,
+                    suite="golden",
+                    verdict="errored",
+                    duration_seconds=0.0,
+                    langfuse_trace_id="(cassette-missing)",
+                    message=str(exc),
+                )
+            )
+            continue
+        results.append(
+            await run_case(case, suite="golden", producer=producer)
+        )
     return SuiteResult.from_cases(suite="golden", cases=results)
 
 
@@ -81,7 +97,7 @@ async def _run_spreadsheetbench() -> SuiteResult:
         return SuiteResult.from_cases(suite="spreadsheetbench", cases=[])
     return await sb_runner.run(
         dataset_root=dataset_root,
-        producer=_identity_producer_for([]),  # no cases pre-loaded
+        producer=_empty_producer(),
         filter=filt,
     )
 

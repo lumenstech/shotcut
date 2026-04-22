@@ -1,0 +1,36 @@
+{
+  "case_id": "multi_sheet_total",
+  "prompt": "In a new sheet 'Model', cell A1, sum Inputs!A1 and Inputs!A2 via a formula.",
+  "plan": {
+    "summary": "Create Inputs with the operands, create Model with a cross-sheet sum.",
+    "steps": [
+      {
+        "title": "Create and populate Inputs",
+        "description": "Add sheet Inputs; seed A1=1000 and A2=500.",
+        "target_sheet": "Inputs",
+        "depends_on": []
+      },
+      {
+        "title": "Create Model and add cross-sheet formula",
+        "description": "Add sheet Model; write =Inputs!A1+Inputs!A2 to Model!A1.",
+        "target_sheet": "Model",
+        "depends_on": [0]
+      }
+    ]
+  },
+  "executor_outputs": [
+    [
+      {"type": "add_sheet", "sheet": "Inputs"},
+      {"type": "write_value", "sheet": "Inputs", "target": "A1", "value": 1000},
+      {"type": "write_value", "sheet": "Inputs", "target": "A2", "value": 500}
+    ],
+    [
+      {"type": "add_sheet", "sheet": "Model"},
+      {"type": "write_formula", "sheet": "Model", "target": "A1", "formula": "=Inputs!A1+Inputs!A2"}
+    ]
+  ],
+  "verifier": {
+    "findings": [],
+    "confidence": 1.0
+  }
+}

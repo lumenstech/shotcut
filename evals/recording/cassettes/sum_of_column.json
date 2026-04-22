@@ -1,0 +1,37 @@
+{
+  "case_id": "sum_of_column",
+  "prompt": "Put the sum of A1:A5 in B1.",
+  "plan": {
+    "summary": "Populate A1:A5 with the reference values and add a SUM in B1.",
+    "steps": [
+      {
+        "title": "Seed input column",
+        "description": "Write 10, 20, 30, 40, 50 into A1:A5.",
+        "target_sheet": "Sheet",
+        "depends_on": []
+      },
+      {
+        "title": "Add total",
+        "description": "Write =SUM(A1:A5) into B1.",
+        "target_sheet": "Sheet",
+        "depends_on": [0]
+      }
+    ]
+  },
+  "executor_outputs": [
+    [
+      {"type": "write_value", "sheet": "Sheet", "target": "A1", "value": 10},
+      {"type": "write_value", "sheet": "Sheet", "target": "A2", "value": 20},
+      {"type": "write_value", "sheet": "Sheet", "target": "A3", "value": 30},
+      {"type": "write_value", "sheet": "Sheet", "target": "A4", "value": 40},
+      {"type": "write_value", "sheet": "Sheet", "target": "A5", "value": 50}
+    ],
+    [
+      {"type": "write_formula", "sheet": "Sheet", "target": "B1", "formula": "=SUM(A1:A5)"}
+    ]
+  ],
+  "verifier": {
+    "findings": [],
+    "confidence": 1.0
+  }
+}

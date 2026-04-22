@@ -1,0 +1,35 @@
+{
+  "case_id": "formula_reference_chain",
+  "prompt": "Given A1=100, compute a three-step chain: A2 is A1 doubled, A3 is A2 + 50, A4 is A3 / 5.",
+  "plan": {
+    "summary": "Seed A1 and compute a dependent formula chain through A4.",
+    "steps": [
+      {
+        "title": "Seed A1",
+        "description": "Write 100 to A1.",
+        "target_sheet": "Sheet",
+        "depends_on": []
+      },
+      {
+        "title": "Build dependent formula chain",
+        "description": "A2=A1*2, A3=A2+50, A4=A3/5 — referenced in order so each downstream cell sees its input.",
+        "target_sheet": "Sheet",
+        "depends_on": [0]
+      }
+    ]
+  },
+  "executor_outputs": [
+    [
+      {"type": "write_value", "sheet": "Sheet", "target": "A1", "value": 100}
+    ],
+    [
+      {"type": "write_formula", "sheet": "Sheet", "target": "A2", "formula": "=A1*2"},
+      {"type": "write_formula", "sheet": "Sheet", "target": "A3", "formula": "=A2+50"},
+      {"type": "write_formula", "sheet": "Sheet", "target": "A4", "formula": "=A3/5"}
+    ]
+  ],
+  "verifier": {
+    "findings": [],
+    "confidence": 1.0
+  }
+}

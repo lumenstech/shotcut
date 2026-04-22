@@ -120,3 +120,54 @@ produced the wrong cell, what prompt the planner used.
 - **Flaky-test tolerance / retry loops**: tests that rely on Anthropic
   are offline-mocked; there's nothing to be flaky about until we wire
   a live-Anthropic CI job (which we won't).
+
+## Follow-up: recorded-trace producer (shipped)
+
+The initial Stage 10 scaffold used an identity producer — each case's
+prompt mapped directly to its expected workbook, exercising the
+framework (traces, scoring, gate) but not any agent machinery. The
+follow-up replaces that with a cassette-based replay producer:
+
+- `evals/recording/cassettes/<case_id>.json` stores the Plan + per-
+  step executor action list + VerificationReport that the agents
+  *would have* produced for the case's prompt.
+- `evals/recording/producer.py`'s `recorded_trace_producer(case_id)`
+  loads the cassette at closure-build time (so `CassetteMissing`
+  fires at CLI startup, not mid-run) and applies the recorded
+  actions against `Workbook.blank()`.
+- The CLI's golden run uses the recorded-trace producer by default.
+  Missing cassettes land as `verdict=errored` rows — the gate fails
+  loudly on drift between `golden/cases.py` and the cassette
+  directory.
+
+What this catches that the identity producer didn't:
+
+- Action schema drift: cassettes fail to load when the Pydantic
+  discriminated union rejects them. A new required field on
+  `WriteFormula`, a renamed action type, etc. trip at load time.
+- `Workbook.apply` regressions: cassettes that used to produce the
+  expected workbook now produce a different one → scorer diff.
+- Scorer regressions: identical cassettes + workbooks produce
+  different diff-labeling.
+
+What it still doesn't catch: the Anthropic SDK layer (covered by
+`tests/observability/test_llm_wiring.py`), agent prompt stability
+(inherently non-deterministic, not something to verbatim-gate on),
+and full orchestrator behavior including DB audit. A richer
+follow-up would wire `orchestrator.run()` with stubbed agents
+reading from the cassette; scoped out for now because the apply-
+path coverage here is already a meaningful step up from identity.
+
+**Cassette update workflow.** When an action schema changes or a
+golden case's expected workbook moves, the cassette needs to move
+with it. Workflow:
+
+1. Run the real agents against the case's prompt in a scratch
+   environment (live Anthropic).
+2. Capture the Plan + executor outputs + verifier report.
+3. Serialize to the cassette JSON schema.
+4. Commit the new cassette alongside whatever change motivated it.
+
+We don't ship tooling for (1)-(3) in this follow-up; cassettes are
+small enough today to hand-craft, and the failure mode (scorer diff
+with clear location) points at what needs updating.

@@ -50,8 +50,11 @@ def _formula_reference_chain() -> Workbook:
 
 def _multi_sheet_total() -> Workbook:
     def build(wb: OpenpyxlWorkbook) -> None:
-        inputs = wb.active
-        inputs.title = "Inputs"
+        # Leave the default "Sheet" in place. Our Action vocabulary has
+        # no RemoveSheet, so a real agent working from blank would land
+        # the orphan default sheet alongside Inputs + Model. Expected
+        # matches that reality — updating when RemoveSheet ships.
+        inputs = wb.create_sheet("Inputs")
         inputs["A1"] = 1000
         inputs["A2"] = 500
         model = wb.create_sheet("Model")
