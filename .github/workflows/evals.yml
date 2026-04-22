@@ -1,0 +1,58 @@
+name: evals
+
+# Runs on every PR. Gates:
+#   - golden set must pass 100% (evals/golden/cases.py drives against
+#     a deterministic producer; no Anthropic API calls)
+#   - SpreadsheetBench subset must not drop >2% from
+#     evals/results/baseline.json
+#
+# The full SpreadsheetBench dataset is not bundled; this job runs
+# against a committed test-fixture manifest. Production triggers the
+# full run on a weekly cron under a separate workflow (not shipped
+# with this PR — deployment concern).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  golden-set:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install -e ".[dev]"
+      - name: Run golden set
+        env:
+          ANTHROPIC_API_KEY: ci-dummy-key
+          AUTH_DISABLED: "true"
+        run: |
+          python -m evals.cli golden --gate
+        # `evals.cli` exits non-zero when the gate fails; the step
+        # therefore fails the PR on golden regression.
+
+  spreadsheetbench-subset:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install -e ".[dev]"
+      - name: Run SpreadsheetBench subset
+        env:
+          ANTHROPIC_API_KEY: ci-dummy-key
+          AUTH_DISABLED: "true"
+          # Small subset so CI time stays bounded; weekly cron covers
+          # the full run.
+          SPREADSHEETBENCH_MAX_CASES: "20"
+        run: |
+          python -m evals.cli spreadsheetbench --gate

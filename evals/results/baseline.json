@@ -1,0 +1,10 @@
+{
+  "_comment": "Stage 10 baseline. Human-committed only — never auto-overwritten. Raising the floor requires an explicit commit with a message explaining why. See docs/decisions/0007-eval-suite.md.",
+  "golden": {
+    "sum_of_column": "passed",
+    "formula_reference_chain": "passed",
+    "multi_sheet_total": "passed"
+  },
+  "spreadsheetbench_pass_rate": 0.0,
+  "spreadsheetbench_cases": {}
+}
