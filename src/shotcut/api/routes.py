@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,12 +13,19 @@ from shotcut.api.schemas import (
     ActionOut,
     ApprovalResponse,
     AuditResponse,
+    BranchRequest,
+    BranchResponse,
     PendingApprovalOut,
     PromptRequest,
     PromptResponse,
     SessionCreateResponse,
+    UndoResponse,
     UploadResponse,
 )
+from shotcut.audit import branch as branch_mod
+from shotcut.audit import export as export_mod
+from shotcut.audit import replay as replay_mod
+from shotcut.audit import undo as undo_mod
 from shotcut.config import settings
 from shotcut.db.models import Action, ActionStatus
 from shotcut.db.models import Session as SessionRow
@@ -197,6 +204,119 @@ async def reject_action(
     row.status = ActionStatus.REJECTED
     await db.commit()
     return ApprovalResponse(action_id=row.id, status=row.status)
+
+
+# ---------------------------------------------------------------------------
+# Stage 5: replay, branch, undo, audit export
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/replay/{sequence}")
+async def replay_to_sequence(
+    session_id: uuid.UUID,
+    sequence: int,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """Reconstruct the workbook state at the given sequence number and
+    return it as an .xlsx download. Does not mutate the session's
+    persisted workbook."""
+    session = await db.get(SessionRow, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    workbook = await replay_mod.replay_to(
+        db, session_id=session_id, up_to_sequence=sequence
+    )
+
+    storage = get_storage()
+    out_path = storage.local_path(session_id, f"replay_{sequence}.xlsx")
+    assert out_path is not None
+    workbook.save(out_path)
+    return FileResponse(
+        out_path,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        filename=f"{session_id}-replay-{sequence}.xlsx",
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/branch",
+    response_model=BranchResponse,
+)
+async def branch_session(
+    session_id: uuid.UUID,
+    body: BranchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> BranchResponse:
+    """Fork the session at `at_sequence`. Returns the new child
+    session id — subsequent actions go to the child independently."""
+    parent = await db.get(SessionRow, session_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    child = await branch_mod.fork_at(
+        db,
+        parent_session_id=session_id,
+        at_sequence=body.at_sequence,
+        title=body.title,
+    )
+    return BranchResponse(
+        child_session_id=child.id,
+        parent_session_id=session_id,
+        branched_at_sequence=body.at_sequence,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/actions/{action_id}/undo",
+    response_model=UndoResponse,
+)
+async def undo_action(
+    session_id: uuid.UUID,
+    action_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> UndoResponse:
+    """Create and apply the inverse of `action_id`. Original row's status
+    flips to UNDONE; inverse is inserted as a new APPLIED row with
+    `parent_action_id` pointing at the original."""
+    row = await db.get(Action, action_id)
+    if row is None or row.session_id != session_id:
+        raise HTTPException(status_code=404, detail="action not found for session")
+
+    try:
+        inverse_row = await undo_mod.undo_action(db, action_row=row)
+    except undo_mod.UndoUnsupported as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return UndoResponse(
+        original_action_id=row.id,
+        inverse_action_id=inverse_row.id,
+        inverse_sequence=inverse_row.sequence,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/audit/export",
+    response_class=PlainTextResponse,
+)
+async def export_audit(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> PlainTextResponse:
+    """Return the session's audit history rendered as markdown."""
+    session = await db.get(SessionRow, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    markdown = await export_mod.render_markdown(db, session_id=session_id)
+    return PlainTextResponse(content=markdown, media_type="text/markdown")
+
+
+# ---------------------------------------------------------------------------
+# Downloads / audit (Stage 0 + Stage 3)
+# ---------------------------------------------------------------------------
 
 
 @router.get("/sessions/{session_id}/workbook")

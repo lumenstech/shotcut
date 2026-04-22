@@ -117,3 +117,32 @@ class Action(Base):
     user_sub: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     session: Mapped[Session] = relationship(back_populates="actions")
+
+
+class SessionBranch(Base):
+    """Lineage edge between two sessions.
+
+    Branching creates a new Session whose initial state is the parent's
+    state at `branched_at_sequence`. Actions up to that sequence are
+    copied to the child with matching `client_action_id` values but new
+    DB row ids. Subsequent actions on either branch are independent.
+
+    Stored as a separate table rather than a `parent_session_id` column
+    on `sessions` so Stage 3's consolidated schema and Stage 8's RLS
+    policies on `sessions` don't have to accommodate a retroactive
+    column add (see docs/decisions/0002-schema-consolidation.md).
+    """
+
+    __tablename__ = "session_branches"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), unique=True
+    )
+    parent_session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), index=True
+    )
+    branched_at_sequence: Mapped[int] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

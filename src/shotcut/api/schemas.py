@@ -70,3 +70,20 @@ class UploadResponse(BaseModel):
     session_id: uuid.UUID
     size_bytes: int
     metadata: ParseMetadata
+
+
+class BranchRequest(BaseModel):
+    at_sequence: int
+    title: str | None = None
+
+
+class BranchResponse(BaseModel):
+    child_session_id: uuid.UUID
+    parent_session_id: uuid.UUID
+    branched_at_sequence: int
+
+
+class UndoResponse(BaseModel):
+    original_action_id: uuid.UUID
+    inverse_action_id: uuid.UUID
+    inverse_sequence: int
