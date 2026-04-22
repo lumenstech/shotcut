@@ -7,6 +7,7 @@ structured output via `client.messages.parse()`.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -46,7 +47,7 @@ class Plan(BaseModel):
     steps: list[PlanStep]
 
 
-async def plan(prompt: str, workbook_summary: dict) -> Plan:
+async def plan(prompt: str, workbook_summary: dict[str, Any]) -> Plan:
     client = get_client()
     user_message = (
         f"User request:\n{prompt}\n\n"
@@ -61,4 +62,7 @@ async def plan(prompt: str, workbook_summary: dict) -> Plan:
         messages=[{"role": "user", "content": user_message}],
         output_format=Plan,
     )
-    return response.parsed_output
+    result = response.parsed_output
+    if result is None:
+        raise RuntimeError("planner: model returned no parseable output")
+    return result

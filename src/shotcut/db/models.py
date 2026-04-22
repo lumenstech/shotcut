@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -43,8 +44,8 @@ class Action(Base):
     sheet: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_range: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    previous_value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    new_value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    previous_value: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    new_value: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

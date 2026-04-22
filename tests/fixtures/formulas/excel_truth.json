@@ -1,0 +1,258 @@
+{
+  "_note": "Ground-truth formula evaluations for the Stage 1 calc engine. Each case has a formula, its inputs as cell writes, and the expected value after evaluation. Values are hand-computed against Excel 2019+ semantics (1900 date system with the 1900-02-29 leap-year bug preserved). Dates in the fixture use the formula (d - 1899-12-30).days for serials. The test runner (tests/spreadsheet/test_engine.py) writes inputs, evaluates the formula, and asserts |actual - expected| < 1e-6 for numbers or exact equality for strings/bools.",
+  "cases": [
+    {
+      "id": "arithmetic_precedence",
+      "description": "Operator precedence: * binds tighter than +",
+      "inputs": [],
+      "sheets": ["Sheet1"],
+      "formula": "=2+3*4",
+      "formula_cell": {"sheet": "Sheet1", "ref": "A1"},
+      "expected": 14.0
+    },
+    {
+      "id": "arithmetic_parens",
+      "description": "Parens override precedence",
+      "inputs": [],
+      "sheets": ["Sheet1"],
+      "formula": "=(2+3)*4",
+      "formula_cell": {"sheet": "Sheet1", "ref": "A1"},
+      "expected": 20.0
+    },
+    {
+      "id": "sum_range",
+      "description": "Sum over a contiguous range",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": 2.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0},
+        {"sheet": "Sheet1", "ref": "A4", "value": 4.0},
+        {"sheet": "Sheet1", "ref": "A5", "value": 5.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=SUM(A1:A5)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": 15.0
+    },
+    {
+      "id": "average_range",
+      "description": "Average over a contiguous range",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": 2.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0},
+        {"sheet": "Sheet1", "ref": "A4", "value": 4.0},
+        {"sheet": "Sheet1", "ref": "A5", "value": 5.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=AVERAGE(A1:A5)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": 3.0
+    },
+    {
+      "id": "count_ignores_text",
+      "description": "COUNT returns only numeric cell count",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": "hello"},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=COUNT(A1:A3)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": 2.0
+    },
+    {
+      "id": "counta_includes_text",
+      "description": "COUNTA counts any non-empty cell",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": "hello"},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=COUNTA(A1:A3)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": 3.0
+    },
+    {
+      "id": "min_negatives",
+      "description": "MIN returns the smallest including negatives",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 5.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": -3.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 9.0},
+        {"sheet": "Sheet1", "ref": "A4", "value": 1.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=MIN(A1:A4)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": -3.0
+    },
+    {
+      "id": "max",
+      "description": "MAX returns the largest value",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 5.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": -3.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 9.0},
+        {"sheet": "Sheet1", "ref": "A4", "value": 1.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=MAX(A1:A4)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": 9.0
+    },
+    {
+      "id": "if_true_branch",
+      "description": "IF selects the true branch",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 20.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=IF(A1>10, \"big\", \"small\")",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": "big"
+    },
+    {
+      "id": "ifs_first_match",
+      "description": "IFS returns the first matching condition's value",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": -5.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=IFS(A1<0,\"neg\",A1=0,\"zero\",A1>0,\"pos\")",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": "neg"
+    },
+    {
+      "id": "and_all_true",
+      "description": "AND returns TRUE only if all args are truthy",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": 2.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=AND(A1>0, A2>0, A3>0)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": true
+    },
+    {
+      "id": "or_any_true",
+      "description": "OR returns TRUE if any arg is truthy",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": -1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": -2.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=OR(A1>0, A2>0, A3>0)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": true
+    },
+    {
+      "id": "not_inverts",
+      "description": "NOT inverts a boolean",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 5.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=NOT(A1=0)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": true
+    },
+    {
+      "id": "index_match",
+      "description": "INDEX+MATCH lookup by label",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": "one"},
+        {"sheet": "Sheet1", "ref": "A2", "value": "two"},
+        {"sheet": "Sheet1", "ref": "A3", "value": "three"},
+        {"sheet": "Sheet1", "ref": "B1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "B2", "value": 2.0},
+        {"sheet": "Sheet1", "ref": "B3", "value": 3.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=INDEX(B1:B3, MATCH(\"two\", A1:A3, 0))",
+      "formula_cell": {"sheet": "Sheet1", "ref": "C1"},
+      "expected": 2.0
+    },
+    {
+      "id": "vlookup_exact",
+      "description": "VLOOKUP with exact-match (4th arg FALSE)",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": "A"},
+        {"sheet": "Sheet1", "ref": "A2", "value": "B"},
+        {"sheet": "Sheet1", "ref": "A3", "value": "C"},
+        {"sheet": "Sheet1", "ref": "B1", "value": "alpha"},
+        {"sheet": "Sheet1", "ref": "B2", "value": "bravo"},
+        {"sheet": "Sheet1", "ref": "B3", "value": "charlie"}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=VLOOKUP(\"B\", A1:B3, 2, FALSE)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "C1"},
+      "expected": "bravo"
+    },
+    {
+      "id": "xlookup_exact",
+      "description": "XLOOKUP with separate lookup and return ranges",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": "A"},
+        {"sheet": "Sheet1", "ref": "A2", "value": "B"},
+        {"sheet": "Sheet1", "ref": "A3", "value": "C"},
+        {"sheet": "Sheet1", "ref": "B1", "value": "alpha"},
+        {"sheet": "Sheet1", "ref": "B2", "value": "bravo"},
+        {"sheet": "Sheet1", "ref": "B3", "value": "charlie"}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=XLOOKUP(\"B\", A1:A3, B1:B3)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "C1"},
+      "expected": "bravo"
+    },
+    {
+      "id": "absolute_and_relative_refs",
+      "description": "Mix of $A$1 (absolute), A$2 (row-anchored), $A3 (col-anchored), A4 (relative) all pointing at column A",
+      "inputs": [
+        {"sheet": "Sheet1", "ref": "A1", "value": 1.0},
+        {"sheet": "Sheet1", "ref": "A2", "value": 2.0},
+        {"sheet": "Sheet1", "ref": "A3", "value": 3.0},
+        {"sheet": "Sheet1", "ref": "A4", "value": 4.0}
+      ],
+      "sheets": ["Sheet1"],
+      "formula": "=$A$1+A$2+$A3+A4",
+      "formula_cell": {"sheet": "Sheet1", "ref": "B1"},
+      "expected": 10.0
+    },
+    {
+      "id": "cross_sheet",
+      "description": "Reference cells on another sheet via Sheet!Ref syntax",
+      "inputs": [
+        {"sheet": "Inputs", "ref": "A1", "value": 100.0},
+        {"sheet": "Inputs", "ref": "A2", "value": 50.0}
+      ],
+      "sheets": ["Inputs", "Outputs"],
+      "formula": "=Inputs!A1+Inputs!A2",
+      "formula_cell": {"sheet": "Outputs", "ref": "A1"},
+      "expected": 150.0
+    },
+    {
+      "id": "date_serial",
+      "description": "DATE(2024,4,15) under Excel 1900 date system = 45397. Computed as (date(2024,4,15) - date(1899,12,30)).days.",
+      "inputs": [],
+      "sheets": ["Sheet1"],
+      "formula": "=DATE(2024,4,15)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "A1"},
+      "expected": 45397.0
+    },
+    {
+      "id": "eomonth_leap_feb",
+      "description": "EOMONTH(DATE(2024,2,10), 0) returns Feb 29 2024 (leap year) = serial 45351",
+      "inputs": [],
+      "sheets": ["Sheet1"],
+      "formula": "=EOMONTH(DATE(2024,2,10), 0)",
+      "formula_cell": {"sheet": "Sheet1", "ref": "A1"},
+      "expected": 45351.0
+    }
+  ]
+}

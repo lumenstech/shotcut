@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from shotcut.config import settings
 from shotcut.llm.client import cached_system, get_client
-from shotcut.spreadsheet.engine import ValidationIssue, validate_formula
+from shotcut.spreadsheet.validator import ValidationIssue, validate_formula
 from shotcut.spreadsheet.workbook import Workbook
 
 SYSTEM_PROMPT = """You are the verification agent in a spreadsheet construction system.
@@ -73,4 +73,7 @@ async def verify_semantics(prompt: str, workbook: Workbook) -> VerificationRepor
         messages=[{"role": "user", "content": user_message}],
         output_format=VerificationReport,
     )
-    return response.parsed_output
+    result = response.parsed_output
+    if result is None:
+        raise RuntimeError("verifier: model returned no parseable output")
+    return result

@@ -1,5 +1,7 @@
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -12,7 +14,7 @@ logging.basicConfig(level=settings.log_level)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # MVP: auto-create tables. Productionize with Alembic migrations.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -24,5 +26,5 @@ app.include_router(router)
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health() -> dict[str, Any]:
     return {"status": "ok"}

@@ -1,4 +1,4 @@
-from shotcut.spreadsheet.engine import validate_formula
+from shotcut.spreadsheet.validator import validate_formula
 
 
 def test_valid_formula():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -22,7 +23,7 @@ class PromptResponse(BaseModel):
     session_id: uuid.UUID
     plan: Plan
     actions_applied: int
-    syntactic_issues: list[dict]
+    syntactic_issues: list[dict[str, Any]]
     verification: VerificationReport
     download_path: str
 
@@ -33,7 +34,7 @@ class ActionOut(BaseModel):
     action_type: str
     sheet: str | None
     target_range: str | None
-    new_value: dict | None
+    new_value: dict[str, Any] | None
     reasoning: str | None
     created_at: datetime
 

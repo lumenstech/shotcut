@@ -14,7 +14,9 @@ the workbook and writing the audit log. This keeps validation in Python.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
+
+from anthropic.types import MessageParam, ToolParam, ToolResultBlockParam, ToolUseBlock
 
 from shotcut.agents.planner import PlanStep
 from shotcut.config import settings
@@ -45,7 +47,7 @@ Rules:
   text summary of what you wrote.
 """
 
-TOOLS: list[dict] = [
+TOOLS: list[ToolParam] = [
     {
         "name": "write_formula",
         "description": "Write an Excel formula to a cell or range. The formula must start with '='.",
@@ -126,7 +128,9 @@ def _build_action(name: str, inputs: dict[str, Any]) -> Action:
     raise ValueError(f"Unknown tool: {name}")
 
 
-async def execute(step: PlanStep, workbook_summary: dict, max_iterations: int = 6) -> list[Action]:
+async def execute(
+    step: PlanStep, workbook_summary: dict[str, Any], max_iterations: int = 6
+) -> list[Action]:
     """Run a manual tool-use loop; collect Action objects without executing them."""
     client = get_client()
     user_message = (
@@ -136,7 +140,7 @@ async def execute(step: PlanStep, workbook_summary: dict, max_iterations: int = 
         f"Target sheet hint: {step.target_sheet or '(unspecified)'}\n\n"
         f"Current workbook state (JSON):\n{json.dumps(workbook_summary, default=str)}"
     )
-    messages = [{"role": "user", "content": user_message}]
+    messages: list[MessageParam] = [{"role": "user", "content": user_message}]
     actions: list[Action] = []
 
     for _ in range(max_iterations):
@@ -150,21 +154,24 @@ async def execute(step: PlanStep, workbook_summary: dict, max_iterations: int = 
             messages=messages,
         )
 
-        tool_uses = [b for b in response.content if b.type == "tool_use"]
+        tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
         if not tool_uses:
             break
 
         messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
+        tool_results: list[ToolResultBlockParam] = []
         for block in tool_uses:
             try:
-                action = _build_action(block.name, block.input)
+                # block.input is typed `object` on the SDK; our tool schemas
+                # constrain it to JSON objects, so a runtime cast is safe.
+                action = _build_action(block.name, cast(dict[str, Any], block.input))
                 actions.append(action)
+                target = cast(dict[str, Any], block.input).get("target", "?")
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": f"recorded {block.name} for {block.input.get('target', '?')}",
+                        "content": f"recorded {block.name} for {target}",
                     }
                 )
             except Exception as exc:

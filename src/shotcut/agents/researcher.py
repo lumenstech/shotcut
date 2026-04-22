@@ -51,4 +51,6 @@ async def research(ticker: str, metric_names: list[str]) -> ResearchResult:
         output_format=ResearchResult,
     )
     result = response.parsed_output
+    if result is None:
+        raise RuntimeError("researcher: model returned no parseable output")
     return result

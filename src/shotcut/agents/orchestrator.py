@@ -20,7 +20,7 @@ from shotcut.agents.verifier import VerificationReport
 from shotcut.config import settings
 from shotcut.db import audit
 from shotcut.db.models import Session as SessionRow
-from shotcut.spreadsheet.engine import ValidationIssue
+from shotcut.spreadsheet.validator import ValidationIssue
 from shotcut.spreadsheet.workbook import Workbook
 
 log = logging.getLogger(__name__)

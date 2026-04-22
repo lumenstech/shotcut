@@ -1,14 +1,18 @@
-"""Thin wrapper around openpyxl that applies Action objects and surfaces
-workbook state to agents as compact JSON.
+"""Openpyxl-backed workbook that applies Action objects and delegates
+formula evaluation to a lazily-constructed `Engine`.
 
-Scope: MVP. openpyxl does not evaluate formulas; we rely on Excel to
-recalculate on open. Formula *syntax* validation lives in engine.py.
+Scope: MVP. Cell mutations flow through this class; reading workbook
+state back out happens via `summary()` (for LLM context) and
+`evaluate_cell()` (for verifier checks and downstream agents).
+
+Formula *syntax* validation lives in `validator.py`. Formula *evaluation*
+lives in `engine.py`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openpyxl import Workbook as OpenpyxlWorkbook
 from openpyxl import load_workbook
@@ -25,6 +29,9 @@ from shotcut.spreadsheet.actions import (
     WriteValue,
 )
 
+if TYPE_CHECKING:
+    from shotcut.spreadsheet.engine import Engine
+
 
 @dataclass
 class CellSnapshot:
@@ -36,6 +43,7 @@ class CellSnapshot:
 class Workbook:
     def __init__(self, wb: OpenpyxlWorkbook):
         self._wb = wb
+        self._engine: Engine | None = None
 
     @classmethod
     def load(cls, path: Path) -> Workbook:
@@ -51,14 +59,19 @@ class Workbook:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._wb.save(path)
 
+    @property
+    def raw(self) -> OpenpyxlWorkbook:
+        """Underlying openpyxl workbook. Engine needs this for state mirroring."""
+        return self._wb
+
     # --- context summary for agents ---
 
-    def summary(self, max_cells_per_sheet: int = 50) -> dict:
+    def summary(self, max_cells_per_sheet: int = 50) -> dict[str, Any]:
         """Compact JSON-friendly snapshot for prompt context."""
-        sheets = []
+        sheets: list[dict[str, Any]] = []
         for name in self._wb.sheetnames:
             ws = self._wb[name]
-            cells: list[dict] = []
+            cells: list[dict[str, Any]] = []
             for row in ws.iter_rows():
                 for cell in row:
                     if cell.value is None:
@@ -84,10 +97,36 @@ class Workbook:
             )
         return {"sheets": sheets}
 
+    # --- formula evaluation ---
+
+    def evaluate_cell(self, sheet: str, ref: str) -> Any:
+        """Evaluate the cell at `sheet!ref`.
+
+        See `shotcut.spreadsheet.engine.Engine.evaluate_cell` for error
+        semantics. Evaluation is lazy: the engine materializes on first
+        call and re-syncs after any `apply()`.
+        """
+        return self._get_engine().evaluate_cell(sheet, ref)
+
+    def _get_engine(self) -> Engine:
+        if self._engine is None:
+            # Deferred import to keep import-time dependencies light for
+            # code paths (e.g. audit replay) that never evaluate formulas.
+            from shotcut.spreadsheet.engine import Engine
+
+            self._engine = Engine(self)
+        return self._engine
+
     # --- apply actions ---
 
-    def apply(self, action: Action) -> dict | None:
+    def apply(self, action: Action) -> dict[str, Any] | None:
         """Apply an action and return the previous value snapshot (for audit)."""
+        result = self._dispatch(action)
+        if self._engine is not None:
+            self._engine.mark_dirty()
+        return result
+
+    def _dispatch(self, action: Action) -> dict[str, Any] | None:
         if isinstance(action, WriteFormula):
             return self._write(action.sheet, action.target, action.formula)
         if isinstance(action, WriteValue):
@@ -107,9 +146,9 @@ class Workbook:
 
     # --- internals ---
 
-    def _write(self, sheet: str, target: str, value: Any) -> dict:
+    def _write(self, sheet: str, target: str, value: Any) -> dict[str, Any]:
         ws = self._wb[sheet]
-        previous = {}
+        previous: dict[str, Any] = {}
         if ":" in target:
             min_col, min_row, max_col, max_row = range_boundaries(target)
             for row in range(min_row, max_row + 1):
@@ -124,9 +163,9 @@ class Workbook:
             cell.value = value
         return {"cells": previous}
 
-    def _format(self, action: FormatCell) -> dict:
+    def _format(self, action: FormatCell) -> dict[str, Any]:
         ws = self._wb[action.sheet]
-        previous: dict = {}
+        previous: dict[str, Any] = {}
 
         if ":" in action.target:
             min_col, min_row, max_col, max_row = range_boundaries(action.target)
@@ -154,8 +193,10 @@ class Workbook:
 
     @staticmethod
     def _first_column_letter(target: str) -> str:
+        # openpyxl has no type stubs, so these helpers return Any; cast at
+        # the boundary to keep our internal types sharp.
         if ":" in target:
             min_col, _, _, _ = range_boundaries(target)
-            return get_column_letter(min_col)
+            return str(get_column_letter(min_col))
         col, _ = coordinate_from_string(target)
-        return col
+        return str(col)

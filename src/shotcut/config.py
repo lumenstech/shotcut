@@ -24,5 +24,7 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
 
-settings = Settings()
+# Pydantic-settings reads all fields from env/.env; mypy's strict mode
+# doesn't model that, so it insists we pass each alias as a kwarg.
+settings = Settings()  # type: ignore[call-arg]
 settings.storage_dir.mkdir(parents=True, exist_ok=True)

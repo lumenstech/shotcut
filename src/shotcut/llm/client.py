@@ -15,6 +15,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from anthropic import AsyncAnthropic
+from anthropic.types import TextBlockParam
 
 from shotcut.config import settings
 
@@ -24,10 +25,16 @@ def get_client() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
-def cached_system(text: str) -> list[dict]:
+def cached_system(text: str) -> list[TextBlockParam]:
     """Render a system prompt as a single cacheable block.
 
     The minimum cacheable prefix on Opus 4.7 is 4096 tokens — short prompts
     won't actually cache, but the marker is harmless.
     """
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+    return [
+        TextBlockParam(
+            type="text",
+            text=text,
+            cache_control={"type": "ephemeral"},
+        )
+    ]

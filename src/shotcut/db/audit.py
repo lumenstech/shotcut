@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +16,7 @@ async def record(
     session_id: uuid.UUID,
     agent: str,
     action: AgentAction,
-    previous_value: dict | None,
+    previous_value: dict[str, Any] | None,
     reasoning: str | None = None,
 ) -> Action:
     next_seq = await _next_sequence(db, session_id)
