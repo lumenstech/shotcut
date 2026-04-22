@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 from openpyxl import Workbook as OpenpyxlWorkbook
@@ -40,10 +41,39 @@ class CellSnapshot:
     number_format: str | None
 
 
+def _release_empty_vba_archive(pyxl: OpenpyxlWorkbook) -> None:
+    """Close `vba_archive` when the workbook carries no actual VBA.
+
+    openpyxl populates `vba_archive` on every load with `keep_vba=True` —
+    even for plain .xlsx files that have no macros. The archive wraps a
+    BytesIO that gets garbage-collected before the ZipFile itself, and
+    ZipFile's `__del__` then seeks on a freed stream and emits an
+    unraisable exception (pytest surfaces it as
+    `PytestUnraisableExceptionWarning`). When the archive doesn't
+    contain `xl/vbaProject.bin` we have nothing to preserve, so close
+    it now and clear the reference. Real .xlsm workbooks with VBA are
+    left untouched so `save()` can round-trip the binary.
+    """
+    vba = getattr(pyxl, "vba_archive", None)
+    if vba is None:
+        return
+    try:
+        has_vba = "xl/vbaProject.bin" in vba.namelist()
+    except Exception:
+        has_vba = False
+    if not has_vba:
+        try:
+            vba.close()
+        except Exception:
+            pass
+        pyxl.vba_archive = None
+
+
 class Workbook:
     def __init__(self, wb: OpenpyxlWorkbook):
         self._wb = wb
         self._engine: Engine | None = None
+        self._closed = False
 
     @classmethod
     def from_xlsx(cls, path: Path) -> Workbook:
@@ -54,8 +84,13 @@ class Workbook:
         if openpyxl's default ever flips. Callers who want rich metadata
         (named ranges, merges, validations) should use `parser.parse()`
         instead; this classmethod is the minimal constructor.
+
+        Releases the `vba_archive` ZipFile if the file has no actual VBA
+        content. See `_release_empty_vba_archive` for the rationale.
         """
-        return cls(load_workbook(path, data_only=False, keep_vba=True, keep_links=True))
+        pyxl = load_workbook(path, data_only=False, keep_vba=True, keep_links=True)
+        _release_empty_vba_archive(pyxl)
+        return cls(pyxl)
 
     @classmethod
     def blank(cls) -> Workbook:
@@ -66,6 +101,41 @@ class Workbook:
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._wb.save(path)
+
+    def close(self) -> None:
+        """Release openpyxl's resources, in particular the `vba_archive`
+        ZipFile whose `__del__` path is known to fire unraisable exceptions
+        when its BytesIO has already been freed.
+
+        Idempotent. Safe to call even if the workbook is still in use —
+        openpyxl's `close()` only tears down read handles; serialized
+        state stays addressable for later `save()`.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        vba = getattr(self._wb, "vba_archive", None)
+        if vba is not None:
+            try:
+                vba.close()
+            except Exception:
+                pass
+            self._wb.vba_archive = None
+        try:
+            self._wb.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> Workbook:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
     @property
     def raw(self) -> OpenpyxlWorkbook:

@@ -28,7 +28,7 @@ from typing import Any
 from openpyxl import load_workbook
 from pydantic import BaseModel
 
-from shotcut.spreadsheet.workbook import Workbook
+from shotcut.spreadsheet.workbook import Workbook, _release_empty_vba_archive
 
 
 class NamedRangeMeta(BaseModel):
@@ -97,6 +97,7 @@ def parse(path: Path) -> ParsedWorkbook:
     internally by openpyxl for later resave; we don't expose or execute it.
     """
     pyxl = load_workbook(path, data_only=False, keep_vba=True, keep_links=True)
+    _release_empty_vba_archive(pyxl)
     workbook = Workbook(pyxl)
     metadata = _extract_metadata(pyxl)
     return ParsedWorkbook(metadata=metadata, workbook=workbook)
@@ -179,20 +180,11 @@ def _extract_metadata(pyxl: Any) -> ParseMetadata:
             )
         )
 
-    # VBA and external links.
-    #
-    # openpyxl sets `vba_archive` to a ZipFile for every workbook loaded with
-    # `keep_vba=True`, not just .xlsm files — the archive is the workbook's
-    # own container. Real VBA content lives at `xl/vbaProject.bin` inside
-    # that archive, so check for the entry rather than for the archive
-    # object itself.
-    has_vba = False
-    vba_archive = getattr(pyxl, "vba_archive", None)
-    if vba_archive is not None:
-        try:
-            has_vba = "xl/vbaProject.bin" in vba_archive.namelist()
-        except Exception:
-            has_vba = False
+    # VBA. `_release_empty_vba_archive` (called at workbook-construction
+    # time) has already detected and closed the archive when no VBA is
+    # present, leaving `pyxl.vba_archive is None`. A non-None archive here
+    # means real VBA content that we preserve for save().
+    has_vba = getattr(pyxl, "vba_archive", None) is not None
     if has_vba:
         warnings.append("workbook contains VBA macros; they are preserved in the "
                         "binary but not executed or editable via the API.")
