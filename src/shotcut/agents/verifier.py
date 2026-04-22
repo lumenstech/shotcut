@@ -41,7 +41,8 @@ from pydantic import BaseModel, Field
 
 from shotcut.agents.verifier_prompts import SEMANTIC_SYSTEM_PROMPT
 from shotcut.config import settings
-from shotcut.llm.client import cached_system, get_client
+from shotcut.llm.client import cached_system, get_client, traced_parse
+from shotcut.observability import tracing as _tracing
 from shotcut.spreadsheet.engine import (
     CircularReferenceError,
     DivisionByZeroError,
@@ -283,16 +284,18 @@ async def _semantic_pass(workbook: Workbook, prompt: str) -> _SemanticFindings:
         f"Original request:\n{prompt}\n\n"
         f"Workbook state (JSON):\n{json.dumps(summary, default=str)}"
     )
-    response = await client.messages.parse(
-        model=settings.verifier_model,
-        max_tokens=16000,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
-        system=cached_system(SEMANTIC_SYSTEM_PROMPT),
-        messages=[{"role": "user", "content": user_message}],
-        output_format=_SemanticFindings,
-    )
-    result = response.parsed_output
+    with _tracing.start_span("agent.verifier.semantic"):
+        response = await traced_parse(
+            client,
+            model=settings.verifier_model,
+            max_tokens=16000,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            system=cached_system(SEMANTIC_SYSTEM_PROMPT),
+            messages=[{"role": "user", "content": user_message}],
+            output_format=_SemanticFindings,
+        )
+    result: _SemanticFindings | None = response.parsed_output
     if result is None:
         raise RuntimeError("verifier: semantic level returned no parseable output")
     # Force the level on findings — the LLM can hallucinate; we label

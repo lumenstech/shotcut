@@ -25,6 +25,7 @@ from shotcut.agents.planner import Plan
 from shotcut.agents.verifier import VerificationReport
 from shotcut.auth.tenancy import UserContext
 from shotcut.db import audit
+from shotcut.observability import tracing
 from shotcut.db.models import Action, ActionStatus
 from shotcut.db.models import Session as SessionRow
 from shotcut.spreadsheet.actions import Action as AgentAction
@@ -71,6 +72,37 @@ async def run(
     """
     tenant_id = user.tenant_id if user is not None else None
     user_sub = user.sub if user is not None else None
+
+    # Stage 9 session root span. Every nested span (planner / executor /
+    # verifier + LLM calls) inherits via contextvar. See
+    # docs/decisions/0006-observability.md for the taxonomy.
+    with tracing.start_span(
+        "session.turn",
+        session_id=str(session_id),
+        tenant_id=str(tenant_id) if tenant_id is not None else "",
+        user_sub=user_sub or "",
+    ):
+        return await _run(
+            db,
+            session_id=session_id,
+            prompt=prompt,
+            input_path=input_path,
+            original_path=original_path,
+            tenant_id=tenant_id,
+            user_sub=user_sub,
+        )
+
+
+async def _run(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    prompt: str,
+    input_path: Path | None,
+    original_path: Path | None,
+    tenant_id: uuid.UUID | None,
+    user_sub: str | None,
+) -> RunResult:
     workbook = Workbook.from_xlsx(input_path) if input_path else Workbook.blank()
     occupancy = (
         OccupancyMap.from_original(Workbook.from_xlsx(original_path))
@@ -83,7 +115,8 @@ async def run(
         occupancy.user_cell_count,
     )
 
-    plan = await planner.plan(prompt, workbook.summary())
+    tenant_tag = str(tenant_id) if tenant_id is not None else ""
+    plan = await planner.plan(prompt, workbook.summary(), tenant_id=tenant_tag)
     log.info("planner: %d steps", len(plan.steps))
 
     applied = 0

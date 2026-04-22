@@ -20,7 +20,8 @@ from anthropic.types import MessageParam, ToolParam, ToolResultBlockParam, ToolU
 
 from shotcut.agents.planner import PlanStep
 from shotcut.config import settings
-from shotcut.llm.client import cached_system, get_client
+from shotcut.llm.client import cached_system, get_client, traced_create
+from shotcut.observability import tracing
 from shotcut.spreadsheet.actions import (
     Action,
     AddSheet,
@@ -144,15 +145,17 @@ async def execute(
     actions: list[Action] = []
 
     for _ in range(max_iterations):
-        response = await client.messages.create(
-            model=settings.executor_model,
-            max_tokens=16000,
-            thinking={"type": "adaptive"},
-            output_config={"effort": "high"},
-            system=cached_system(SYSTEM_PROMPT),
-            tools=TOOLS,
-            messages=messages,
-        )
+        with tracing.start_span("agent.executor.iteration"):
+            response = await traced_create(
+                client,
+                model=settings.executor_model,
+                max_tokens=16000,
+                thinking={"type": "adaptive"},
+                output_config={"effort": "high"},
+                system=cached_system(SYSTEM_PROMPT),
+                tools=TOOLS,
+                messages=messages,
+            )
 
         tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
         if not tool_uses:

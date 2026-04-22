@@ -19,6 +19,7 @@ dependencies = [
     "tenacity>=9.0",
     "formualizer>=0.5.6",
     "pyjwt[crypto]>=2.9",
+    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]

@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     clamd_host: str = Field("localhost", alias="CLAMD_HOST")
     clamd_port: int = Field(3310, alias="CLAMD_PORT")
 
+    # --- Stage 9: observability ---------------------------------------
+    # "noop" | "langfuse". NoOp is zero-cost and always-safe; Langfuse
+    # requires the SDK installed and the LANGFUSE_* credentials below.
+    tracing_backend: str = Field("noop", alias="TRACING_BACKEND")
+    langfuse_host: str = Field("", alias="LANGFUSE_HOST")
+    langfuse_public_key: str = Field("", alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field("", alias="LANGFUSE_SECRET_KEY")
+
 
 # Pydantic-settings reads all fields from env/.env; mypy's strict mode
 # doesn't model that, so it insists we pass each alias as a kwarg.

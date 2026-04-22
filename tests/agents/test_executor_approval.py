@@ -76,7 +76,9 @@ def _patch_agents(
 ) -> None:
     """Stub planner / executor / verifier with canned, deterministic output."""
 
-    async def fake_plan(prompt: str, workbook_summary: dict) -> Plan:
+    async def fake_plan(
+        prompt: str, workbook_summary: dict, *, tenant_id: str = ""
+    ) -> Plan:
         return Plan(
             summary="test plan",
             steps=[PlanStep(title="step 1", description="write actions")],

@@ -12,7 +12,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from shotcut.config import settings
-from shotcut.llm.client import cached_system, get_client
+from shotcut.llm.client import cached_system, get_client, traced_parse
+from shotcut.observability import tracing
 
 SYSTEM_PROMPT = """You are the planning agent in a spreadsheet construction system.
 
@@ -47,22 +48,28 @@ class Plan(BaseModel):
     steps: list[PlanStep]
 
 
-async def plan(prompt: str, workbook_summary: dict[str, Any]) -> Plan:
+async def plan(
+    prompt: str, workbook_summary: dict[str, Any], *, tenant_id: str = ""
+) -> Plan:
     client = get_client()
     user_message = (
         f"User request:\n{prompt}\n\n"
         f"Current workbook state (JSON):\n{json.dumps(workbook_summary, default=str)}"
     )
-    response = await client.messages.parse(
-        model=settings.planner_model,
-        max_tokens=16000,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
-        system=cached_system(SYSTEM_PROMPT),
-        messages=[{"role": "user", "content": user_message}],
-        output_format=Plan,
-    )
-    result = response.parsed_output
+    with tracing.start_span("agent.planner"):
+        response = await traced_parse(
+            client,
+            tenant_id=tenant_id,
+            model=settings.planner_model,
+            max_tokens=16000,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            system=cached_system(SYSTEM_PROMPT),
+            messages=[{"role": "user", "content": user_message}],
+            output_format=Plan,
+        )
+    # traced_parse returns Any (SDK boundary); narrow to Plan for mypy.
+    result: Plan | None = response.parsed_output
     if result is None:
         raise RuntimeError("planner: model returned no parseable output")
     return result

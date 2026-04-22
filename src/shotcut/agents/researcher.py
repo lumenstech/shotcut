@@ -27,7 +27,8 @@ from anthropic.types import MessageParam, ToolParam, ToolResultBlockParam, ToolU
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shotcut.config import settings
-from shotcut.llm.client import cached_system, get_client
+from shotcut.llm.client import cached_system, get_client, traced_create
+from shotcut.observability import tracing
 from shotcut.research import cache
 from shotcut.research.edgar import EdgarClient, EdgarClientError
 from shotcut.research.facts import (
@@ -249,13 +250,15 @@ async def research(
     messages: list[MessageParam] = [{"role": "user", "content": query}]
 
     for _ in range(max_iterations):
-        response = await client.messages.create(
-            model=settings.researcher_model,
-            max_tokens=4000,
-            system=cached_system(SYSTEM_PROMPT),
-            tools=TOOLS,
-            messages=messages,
-        )
+        with tracing.start_span("agent.researcher.iteration"):
+            response = await traced_create(
+                client,
+                model=settings.researcher_model,
+                max_tokens=4000,
+                system=cached_system(SYSTEM_PROMPT),
+                tools=TOOLS,
+                messages=messages,
+            )
 
         tool_uses = [b for b in response.content if isinstance(b, ToolUseBlock)]
         if not tool_uses:
