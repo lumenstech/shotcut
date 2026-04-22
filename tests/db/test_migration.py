@@ -39,21 +39,21 @@ def _make_config(db_url: str) -> Config:
 
 def test_revision_chain_is_linear() -> None:
     """Stage 3 (0001) → Stage 5 erratum (0002) → Stage 5 branches (0003)
-    → Stage 6 orchestrator_states (0004) → Stage 7 financial_facts (0005).
-    Single linear chain, one head."""
+    → Stage 6 orchestrator_states (0004) → Stage 7 financial_facts (0005)
+    → Stage 8 RLS policies (0006). Single linear chain, one head."""
     cfg = _make_config("sqlite://")
     scripts = ScriptDirectory.from_config(cfg)
     revisions = {r.revision: r for r in scripts.walk_revisions()}
-    assert set(revisions) == {"0001", "0002", "0003", "0004", "0005"}
+    assert set(revisions) == {"0001", "0002", "0003", "0004", "0005", "0006"}
     assert revisions["0001"].down_revision is None
     assert revisions["0002"].down_revision == "0001"
     assert revisions["0003"].down_revision == "0002"
     assert revisions["0004"].down_revision == "0003"
     assert revisions["0005"].down_revision == "0004"
-    # Exactly one head.
+    assert revisions["0006"].down_revision == "0005"
     heads = scripts.get_heads()
     assert len(heads) == 1
-    assert heads[0] == "0005"
+    assert heads[0] == "0006"
 
 
 # ---------------------------------------------------------------------------

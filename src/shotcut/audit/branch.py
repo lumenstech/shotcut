@@ -41,15 +41,23 @@ async def fork_at(
     parent_session_id: uuid.UUID,
     at_sequence: int,
     title: str | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> SessionRow:
     """Create a child session branched from `parent_session_id` at
     sequence `at_sequence`.
+
+    `tenant_id` is Stage 8's addition: copied from the calling user's
+    context onto the child session + lineage row so RLS policies scope
+    the child to the same tenant as the parent. Defaults to the parent's
+    tenant_id when None (preserves the Stage 5 call-site contract for
+    tests that don't plumb auth).
 
     Returns the child SessionRow (refreshed from DB).
     """
     parent = await db.get(SessionRow, parent_session_id)
     if parent is None:
         raise ValueError(f"parent session {parent_session_id} does not exist")
+    effective_tenant = tenant_id if tenant_id is not None else parent.tenant_id
 
     child_id = uuid.uuid4()
     storage = get_storage()
@@ -82,6 +90,7 @@ async def fork_at(
         original_workbook_path=(
             str(child_original_path) if child_original_path else None
         ),
+        tenant_id=effective_tenant,
     )
     db.add(child)
     await db.flush()
@@ -133,6 +142,7 @@ async def fork_at(
             child_session_id=child_id,
             parent_session_id=parent_session_id,
             branched_at_sequence=at_sequence,
+            tenant_id=effective_tenant,
         )
     )
 

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shotcut.agents import executor, planner, verifier
 from shotcut.agents.planner import Plan
 from shotcut.agents.verifier import VerificationReport
+from shotcut.auth.tenancy import UserContext
 from shotcut.db import audit
 from shotcut.db.models import Action, ActionStatus
 from shotcut.db.models import Session as SessionRow
@@ -59,7 +60,17 @@ async def run(
     prompt: str,
     input_path: Path | None,
     original_path: Path | None,
+    user: UserContext | None = None,
 ) -> RunResult:
+    """Run one planner/executor/verifier turn.
+
+    `user` is the authenticated caller from Stage 8's middleware. None
+    means pre-auth / test harness without identity; audit rows land
+    with tenant_id + user_sub NULL. Production routes always thread a
+    real UserContext.
+    """
+    tenant_id = user.tenant_id if user is not None else None
+    user_sub = user.sub if user is not None else None
     workbook = Workbook.from_xlsx(input_path) if input_path else Workbook.blank()
     occupancy = (
         OccupancyMap.from_original(Workbook.from_xlsx(original_path))
@@ -98,6 +109,8 @@ async def run(
                     status=ActionStatus.PENDING_APPROVAL,
                     approval_required_reason=check.reason,
                     force_override=False,
+                    tenant_id=tenant_id,
+                    user_sub=user_sub,
                 )
                 pending.append(
                     PendingApproval(
@@ -121,6 +134,8 @@ async def run(
                 previous_value=previous,
                 reasoning=step.title,
                 status=ActionStatus.APPLIED,
+                tenant_id=tenant_id,
+                user_sub=user_sub,
             )
             applied += 1
         await db.commit()

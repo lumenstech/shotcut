@@ -27,7 +27,17 @@ async def record(
     status: ActionStatus = ActionStatus.APPLIED,
     approval_required_reason: str | None = None,
     force_override: bool = False,
+    tenant_id: uuid.UUID | None = None,
+    user_sub: str | None = None,
 ) -> Action:
+    """Insert one audit row.
+
+    `tenant_id` and `user_sub` are populated from Stage 8's auth
+    middleware. They default to None so Stage 1–7 call sites that
+    predate auth continue to work (their rows land as "pre-auth" data;
+    production's RLS policies include an escape-hatch for empty
+    tenant contexts — see alembic/versions/0006_rls_policies.py).
+    """
     next_seq = await _next_sequence(db, session_id)
     row = Action(
         session_id=session_id,
@@ -45,6 +55,8 @@ async def record(
         status=status,
         approval_required_reason=approval_required_reason,
         force_override=force_override,
+        tenant_id=tenant_id,
+        user_sub=user_sub,
     )
     db.add(row)
     await db.flush()

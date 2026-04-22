@@ -171,6 +171,11 @@ class SessionBranch(Base):
         ForeignKey("sessions.id", ondelete="CASCADE"), index=True
     )
     branched_at_sequence: Mapped[int] = mapped_column()
+    # Stage 8: copied from parent at branch time so the child's lineage
+    # edge is RLS-scoped alongside the child session itself.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

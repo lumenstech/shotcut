@@ -136,9 +136,9 @@ def test_upload_rejects_oversize() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_stub_returns_clean_on_any_input() -> None:
-    """Stub always returns clean; Stage 8 swaps to real scanner."""
-    result = scan_bytes(b"totally fine bytes")
+async def test_scan_stub_returns_clean_on_any_input() -> None:
+    """Stub always returns clean; Stage 8 introduces real backends."""
+    result = await scan_bytes(b"totally fine bytes")
     assert isinstance(result, ScanResult)
     assert result.clean is True
     assert result.threat is None
@@ -150,7 +150,7 @@ def test_upload_rejects_when_scanner_flags_threat(
     """If the scan returns not-clean, the endpoint returns 400."""
     from shotcut.api import routes
 
-    def fake_scan(_data: bytes) -> ScanResult:
+    async def fake_scan(_data: bytes) -> ScanResult:
         return ScanResult(clean=False, threat="EICAR-Test-Signature")
 
     monkeypatch.setattr(routes, "scan_bytes", fake_scan)

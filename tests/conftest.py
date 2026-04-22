@@ -12,6 +12,10 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-dummy-key")
+# Tests never talk to Auth0. AUTH_DISABLED=true makes get_current_user
+# return UserContext.anonymous() without touching the verifier, so tests
+# don't need to mint real JWTs unless they're specifically testing auth.
+os.environ.setdefault("AUTH_DISABLED", "true")
 
 from collections.abc import AsyncIterator
 from pathlib import Path

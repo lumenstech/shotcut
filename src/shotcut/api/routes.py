@@ -26,6 +26,8 @@ from shotcut.audit import branch as branch_mod
 from shotcut.audit import export as export_mod
 from shotcut.audit import replay as replay_mod
 from shotcut.audit import undo as undo_mod
+from shotcut.auth.middleware import get_current_user
+from shotcut.auth.tenancy import UserContext, scope_to_tenant
 from shotcut.config import settings
 from shotcut.db.models import Action, ActionStatus, OrchestratorStateEnum
 from shotcut.db.models import Session as SessionRow
@@ -38,22 +40,72 @@ from shotcut.security.scan import scan_bytes
 from shotcut.spreadsheet.parser import parse as parse_workbook
 from shotcut.storage import get_storage
 
-router = APIRouter()
+# Every route in this router requires a valid authenticated user.
+# Individual handlers that need the UserContext take it as a
+# `user: UserContext = Depends(get_current_user)` parameter — FastAPI
+# shares the cached resolution with this router-level dependency so
+# the verify+claims-extract work runs exactly once per request.
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 ORIGINAL_NAME = "original.xlsx"
+
+
+async def _load_scoped_session(
+    db: AsyncSession, session_id: uuid.UUID, user: UserContext
+) -> SessionRow | None:
+    """Tenant-scoped session lookup.
+
+    Returns the row only if its `tenant_id` matches the authenticated
+    user's. This is the application-layer half of Stage 8's
+    defense-in-depth; Postgres RLS (migration 0006) is the other half
+    and enforces the same constraint on non-auth'd connections.
+
+    Carve-out: the anonymous-sentinel tenant (AUTH_DISABLED dev/test
+    mode) additionally matches rows with `tenant_id IS NULL` so pre-
+    Stage-8 fixtures continue to work without rewriting them to
+    populate the zero UUID. Real-tenant users never hit this branch.
+    """
+    anonymous_tenant = UserContext.anonymous().tenant_id
+    if user.tenant_id == anonymous_tenant:
+        stmt = (
+            select(SessionRow)
+            .where(SessionRow.id == session_id)
+            .where(
+                (SessionRow.tenant_id == anonymous_tenant)
+                | SessionRow.tenant_id.is_(None)
+            )
+        )
+    else:
+        stmt = (
+            select(SessionRow)
+            .where(SessionRow.id == session_id)
+            .where(SessionRow.tenant_id == user.tenant_id)
+        )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def _enter_tenant_scope(db: AsyncSession, user: UserContext) -> None:
+    """Set the Postgres session var so RLS policies fire. No-op on SQLite."""
+    await scope_to_tenant(db, user.tenant_id)
 
 
 @router.post("/sessions", response_model=SessionCreateResponse)
 async def create_session(
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> SessionCreateResponse:
     """Create a blank session. Upload an .xlsx separately via /upload."""
+    await _enter_tenant_scope(db, user)
     session_id = uuid.uuid4()
     # Placeholder path for the orchestrator's first save. Overwritten if
     # the user uploads a workbook before prompting.
     workbook_path = settings.storage_dir / "workbooks" / str(session_id) / "current.xlsx"
 
-    row = SessionRow(id=session_id, workbook_path=str(workbook_path))
+    row = SessionRow(
+        id=session_id,
+        workbook_path=str(workbook_path),
+        tenant_id=user.tenant_id,
+    )
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -65,6 +117,7 @@ async def upload_workbook(
     session_id: uuid.UUID,
     upload: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> UploadResponse:
     """Ingest an uploaded .xlsx. Stores the original, parses it for metadata,
     and points the session at it as the starting workbook state.
@@ -80,15 +133,18 @@ async def upload_workbook(
             detail=f"file exceeds {settings.max_upload_mb} MB limit",
         )
 
-    scan = scan_bytes(contents)
+    scan = await scan_bytes(contents)
     if not scan.clean:
         raise HTTPException(
             status_code=400,
             detail=f"upload rejected by scanner: {scan.threat}",
         )
 
-    session = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
     if session is None:
+        # 404 on cross-tenant access too — don't leak existence of other
+        # tenants' sessions via a 403 distinction.
         raise HTTPException(status_code=404, detail="session not found")
 
     storage = get_storage()
@@ -124,6 +180,7 @@ async def prompt_session(
     session_id: uuid.UUID,
     body: PromptRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> PromptAccepted:
     """Start a durable orchestrator run for `session_id`.
 
@@ -131,11 +188,12 @@ async def prompt_session(
     Clients subscribe to `GET /sessions/{id}/events` for progress and
     fetch `/workbook`, `/audit` when state=done.
     """
-    session = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
-    await durable_mod.start(db, session_id=session_id, prompt=body.prompt)
+    await durable_mod.start(db, session_id=session_id, prompt=body.prompt, user=user)
 
     return PromptAccepted(
         session_id=session_id,
@@ -149,6 +207,7 @@ async def prompt_session(
 async def stream_session_events(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     """Server-Sent Events stream of orchestrator progress.
 
@@ -156,7 +215,8 @@ async def stream_session_events(
     in a terminal state when this endpoint is hit, emits one synthetic
     event and closes so late subscribers still see completion.
     """
-    session = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
@@ -194,8 +254,14 @@ async def approve_action(
     session_id: uuid.UUID,
     action_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> ApprovalResponse:
     """Apply a previously-staged pending_approval action with force_override=True."""
+    await _enter_tenant_scope(db, user)
+    # Tenant-scope via the owning session; cross-tenant action lookups 404.
+    session = await _load_scoped_session(db, session_id, user)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
     row = await db.get(Action, action_id)
     if row is None or row.session_id != session_id:
         raise HTTPException(status_code=404, detail="action not found for session")
@@ -221,8 +287,13 @@ async def reject_action(
     session_id: uuid.UUID,
     action_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> ApprovalResponse:
     """Mark a pending action as rejected. Terminal — does not touch the workbook."""
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
     row = await db.get(Action, action_id)
     if row is None or row.session_id != session_id:
         raise HTTPException(status_code=404, detail="action not found for session")
@@ -246,11 +317,13 @@ async def replay_to_sequence(
     session_id: uuid.UUID,
     sequence: int,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> FileResponse:
     """Reconstruct the workbook state at the given sequence number and
     return it as an .xlsx download. Does not mutate the session's
     persisted workbook."""
-    session = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
@@ -279,10 +352,12 @@ async def branch_session(
     session_id: uuid.UUID,
     body: BranchRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> BranchResponse:
     """Fork the session at `at_sequence`. Returns the new child
     session id — subsequent actions go to the child independently."""
-    parent = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    parent = await _load_scoped_session(db, session_id, user)
     if parent is None:
         raise HTTPException(status_code=404, detail="session not found")
 
@@ -291,6 +366,7 @@ async def branch_session(
         parent_session_id=session_id,
         at_sequence=body.at_sequence,
         title=body.title,
+        tenant_id=user.tenant_id,
     )
     return BranchResponse(
         child_session_id=child.id,
@@ -307,10 +383,15 @@ async def undo_action(
     session_id: uuid.UUID,
     action_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> UndoResponse:
     """Create and apply the inverse of `action_id`. Original row's status
     flips to UNDONE; inverse is inserted as a new APPLIED row with
     `parent_action_id` pointing at the original."""
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
     row = await db.get(Action, action_id)
     if row is None or row.session_id != session_id:
         raise HTTPException(status_code=404, detail="action not found for session")
@@ -334,9 +415,11 @@ async def undo_action(
 async def export_audit(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> PlainTextResponse:
     """Return the session's audit history rendered as markdown."""
-    session = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
@@ -353,8 +436,10 @@ async def export_audit(
 async def download_workbook(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> FileResponse:
-    session = await db.get(SessionRow, session_id)
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     path = Path(session.workbook_path)
@@ -371,7 +456,12 @@ async def download_workbook(
 async def get_audit(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserContext = Depends(get_current_user),
 ) -> AuditResponse:
+    await _enter_tenant_scope(db, user)
+    session = await _load_scoped_session(db, session_id, user)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
     stmt = (
         select(Action)
         .where(Action.session_id == session_id)

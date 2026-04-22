@@ -29,6 +29,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shotcut.agents import executor, planner, verifier
+from shotcut.auth.tenancy import UserContext
 from shotcut.db import audit, session as db_session
 from shotcut.db.models import ActionStatus, OrchestratorStateEnum
 from shotcut.db.models import Session as SessionRow
@@ -54,13 +55,24 @@ _running_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
 
 
 async def start(
-    db: AsyncSession, *, session_id: uuid.UUID, prompt: str
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    prompt: str,
+    user: UserContext | None = None,
 ) -> None:
     """Begin a durable orchestrator run for `session_id`.
 
     Creates the OrchestratorState row (state=PLANNING) using the
     caller's `db`, commits, then spawns a background task that uses
     its own DB session.
+
+    `user` is the Stage 8 authenticated caller — threaded to the
+    orchestrator runner so audit rows carry user_sub/tenant_id and
+    RLS policies scope correctly. Resumed runs (after worker restart)
+    pass None: the tenant_id is recoverable from the session row, but
+    user_sub isn't — that's the correct semantics (nobody is logged in
+    when a background resume fires).
     """
     existing = await checkpoint.load(db, session_id=session_id)
     if existing is not None and existing.state not in (
@@ -233,6 +245,10 @@ async def _run(db: AsyncSession, session_id: uuid.UUID) -> None:
             for action in actions:
                 check = occupancy.check(action)
                 if check.blocked:
+                    # tenant_id sourced from the session row so resumed
+                    # runs (no in-memory UserContext) still tenant-scope
+                    # correctly. user_sub is None in durable mode — see
+                    # Stage 8 note on resume semantics in decision 0005.
                     await audit.record(
                         db,
                         session_id=session_id,
@@ -243,6 +259,7 @@ async def _run(db: AsyncSession, session_id: uuid.UUID) -> None:
                         status=ActionStatus.PENDING_APPROVAL,
                         approval_required_reason=check.reason,
                         force_override=False,
+                        tenant_id=session_row.tenant_id,
                     )
                 else:
                     previous = workbook.apply(action)
@@ -254,6 +271,7 @@ async def _run(db: AsyncSession, session_id: uuid.UUID) -> None:
                         previous_value=previous,
                         reasoning=step.title,
                         status=ActionStatus.APPLIED,
+                        tenant_id=session_row.tenant_id,
                     )
 
             # Checkpoint the step boundary. The audit rows above and

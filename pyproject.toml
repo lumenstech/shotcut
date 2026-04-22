@@ -18,6 +18,7 @@ dependencies = [
     "edgartools>=3.0",
     "tenacity>=9.0",
     "formualizer>=0.5.6",
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]
