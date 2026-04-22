@@ -1,16 +1,35 @@
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class ActionStatus(str, enum.Enum):
+    """Lifecycle of a single cell-level mutation.
+
+    - APPLIED: the write hit the workbook and the audit row is authoritative
+    - PENDING_APPROVAL: the orchestrator staged the action because it would
+      overwrite user data; the workbook was NOT modified
+    - REJECTED: user (or the system) declined a pending approval; terminal
+    - UNDONE: Stage 5 inverse-applied this action; terminal
+
+    See docs/decisions/0002-schema-consolidation.md for the state machine.
+    """
+
+    APPLIED = "applied"
+    PENDING_APPROVAL = "pending_approval"
+    REJECTED = "rejected"
+    UNDONE = "undone"
 
 
 class Session(Base):
@@ -23,6 +42,8 @@ class Session(Base):
     # saved on upload — so Stage 5's replay can reconstruct from it.
     workbook_path: Mapped[str] = mapped_column(String(512))
     original_workbook_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Populated in Stage 8; nullable no-op until then.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -34,12 +55,19 @@ class Session(Base):
 
 
 class Action(Base):
-    """Cell-level audit log. Each row is one atomic mutation to the workbook."""
+    """Cell-level audit log. Each row is one atomic mutation (or proposed
+    mutation) against the workbook.
+
+    See docs/decisions/0002-schema-consolidation.md for how the columns
+    partition across Stages 3, 5, and 8.
+    """
 
     __tablename__ = "actions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), index=True
+    )
     sequence: Mapped[int] = mapped_column()
 
     agent: Mapped[str] = mapped_column(String(64))
@@ -53,5 +81,32 @@ class Action(Base):
 
     reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Stage 3 — approval flow.
+    status: Mapped[ActionStatus] = mapped_column(
+        Enum(ActionStatus, name="action_status", values_callable=lambda e: [x.value for x in e]),
+        default=ActionStatus.APPLIED,
+        server_default=ActionStatus.APPLIED.value,
+        index=True,
+    )
+    approval_required_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    force_override: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
+    # Stage 5 — branching (nullable; populated when sessions are forked).
+    parent_action_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("actions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Stage 8 — tenant isolation + audit attribution. Nullable no-ops
+    # until Stage 8 populates them from JWT claims.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    user_sub: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     session: Mapped[Session] = relationship(back_populates="actions")

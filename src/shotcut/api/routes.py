@@ -12,14 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shotcut.agents import orchestrator
 from shotcut.api.schemas import (
     ActionOut,
+    ApprovalResponse,
     AuditResponse,
+    PendingApprovalOut,
     PromptRequest,
     PromptResponse,
     SessionCreateResponse,
     UploadResponse,
 )
 from shotcut.config import settings
-from shotcut.db.models import Action, Session as SessionRow
+from shotcut.db.models import Action, ActionStatus
+from shotcut.db.models import Session as SessionRow
 from shotcut.db.session import get_db
 from shotcut.security.scan import scan_bytes
 from shotcut.spreadsheet.parser import parse as parse_workbook
@@ -114,22 +117,88 @@ async def prompt_session(
 
     input_path = Path(session.workbook_path)
     input_path_arg: Path | None = input_path if input_path.exists() else None
+    original_path_arg: Path | None = None
+    if session.original_workbook_path:
+        candidate = Path(session.original_workbook_path)
+        if candidate.exists():
+            original_path_arg = candidate
 
     result = await orchestrator.run(
         db,
         session_id=session_id,
         prompt=body.prompt,
         input_path=input_path_arg,
+        original_path=original_path_arg,
     )
 
     return PromptResponse(
         session_id=session_id,
         plan=result.plan,
         actions_applied=result.actions_applied,
+        pending_approvals=[
+            PendingApprovalOut(
+                action_id=p.action_id,
+                sheet=p.sheet,
+                target=p.target,
+                action_type=p.action_type,
+                reason=p.reason,
+            )
+            for p in result.pending_approvals
+        ],
         syntactic_issues=[dataclasses.asdict(i) for i in result.syntactic_issues],
         verification=result.verification,
         download_path=f"/sessions/{session_id}/workbook",
     )
+
+
+@router.post(
+    "/sessions/{session_id}/actions/{action_id}/approve",
+    response_model=ApprovalResponse,
+)
+async def approve_action(
+    session_id: uuid.UUID,
+    action_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ApprovalResponse:
+    """Apply a previously-staged pending_approval action with force_override=True."""
+    row = await db.get(Action, action_id)
+    if row is None or row.session_id != session_id:
+        raise HTTPException(status_code=404, detail="action not found for session")
+    if row.status is not ActionStatus.PENDING_APPROVAL:
+        raise HTTPException(
+            status_code=409,
+            detail=f"action is {row.status.value}, not pending_approval",
+        )
+
+    result = await orchestrator.apply_pending_action(db, action_row=row)
+    return ApprovalResponse(
+        action_id=row.id,
+        status=row.status,
+        previous_value=result["previous_value"],  # type: ignore[arg-type]
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/actions/{action_id}/reject",
+    response_model=ApprovalResponse,
+)
+async def reject_action(
+    session_id: uuid.UUID,
+    action_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> ApprovalResponse:
+    """Mark a pending action as rejected. Terminal — does not touch the workbook."""
+    row = await db.get(Action, action_id)
+    if row is None or row.session_id != session_id:
+        raise HTTPException(status_code=404, detail="action not found for session")
+    if row.status is not ActionStatus.PENDING_APPROVAL:
+        raise HTTPException(
+            status_code=409,
+            detail=f"action is {row.status.value}, not pending_approval",
+        )
+    row.status = ActionStatus.REJECTED
+    await db.commit()
+    return ApprovalResponse(action_id=row.id, status=row.status)
 
 
 @router.get("/sessions/{session_id}/workbook")
@@ -172,6 +241,9 @@ async def get_audit(
                 target_range=r.target_range,
                 new_value=r.new_value,
                 reasoning=r.reasoning,
+                status=r.status,
+                approval_required_reason=r.approval_required_reason,
+                force_override=r.force_override,
                 created_at=r.created_at,
             )
             for r in rows

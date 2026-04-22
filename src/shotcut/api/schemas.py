@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from shotcut.agents.planner import Plan
 from shotcut.agents.verifier import VerificationReport
+from shotcut.db.models import ActionStatus
 from shotcut.spreadsheet.parser import ParseMetadata
 
 
@@ -20,10 +21,19 @@ class PromptRequest(BaseModel):
     prompt: str
 
 
+class PendingApprovalOut(BaseModel):
+    action_id: uuid.UUID
+    sheet: str | None
+    target: str | None
+    action_type: str
+    reason: str
+
+
 class PromptResponse(BaseModel):
     session_id: uuid.UUID
     plan: Plan
     actions_applied: int
+    pending_approvals: list[PendingApprovalOut]
     syntactic_issues: list[dict[str, Any]]
     verification: VerificationReport
     download_path: str
@@ -37,7 +47,16 @@ class ActionOut(BaseModel):
     target_range: str | None
     new_value: dict[str, Any] | None
     reasoning: str | None
+    status: ActionStatus
+    approval_required_reason: str | None
+    force_override: bool
     created_at: datetime
+
+
+class ApprovalResponse(BaseModel):
+    action_id: uuid.UUID
+    status: ActionStatus
+    previous_value: dict[str, Any] | None = None
 
 
 class AuditResponse(BaseModel):

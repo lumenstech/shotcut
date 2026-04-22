@@ -26,6 +26,8 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
     "mypy>=1.13",
+    "aiosqlite>=0.20",
+    "alembic>=1.13",
 ]
 
 [build-system]
