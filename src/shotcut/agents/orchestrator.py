@@ -1,10 +1,15 @@
 """Async orchestrator that wires planner → executor → verifier together.
 
 Builds an OccupancyMap from `session.original_workbook_path` and checks
-every executor-emitted Action against it. If an action would overwrite a
-user-sourced cell, it's persisted with `status=pending_approval` and
-`approval_required_reason` populated — the workbook is NOT mutated. The
-caller (approve endpoint) applies those actions explicitly.
+every executor-emitted Action against it. Actions that would overwrite
+user-sourced cells are persisted with `status=pending_approval` and
+`approval_required_reason` populated — the workbook is NOT mutated.
+
+The Stage 4 verifier then evaluates a CLONE of the current workbook
+with pending actions applied, so the user sees findings the applied
+state *would* produce. Critical findings whose target cell falls inside
+a pending action's range are appended to that action's `reasoning`
+column; `status` stays `pending_approval` (verifier never auto-rejects).
 """
 from __future__ import annotations
 
@@ -21,8 +26,8 @@ from shotcut.agents.verifier import VerificationReport
 from shotcut.db import audit
 from shotcut.db.models import Action, ActionStatus
 from shotcut.db.models import Session as SessionRow
+from shotcut.spreadsheet.actions import Action as AgentAction
 from shotcut.spreadsheet.occupancy import OccupancyMap
-from shotcut.spreadsheet.validator import ValidationIssue
 from shotcut.spreadsheet.workbook import Workbook
 from shotcut.storage import get_storage
 
@@ -43,7 +48,6 @@ class RunResult:
     plan: Plan
     actions_applied: int
     pending_approvals: list[PendingApproval]
-    syntactic_issues: list[ValidationIssue]
     verification: VerificationReport
     output_path: Path
 
@@ -56,13 +60,6 @@ async def run(
     input_path: Path | None,
     original_path: Path | None,
 ) -> RunResult:
-    """Run one turn of planner → executor → verifier.
-
-    `input_path` is the current workbook state (what the agent sees when
-    planning). `original_path` is the immutable upload (what we use to
-    derive occupancy). Both may be None on a fresh blank session — in
-    that case OccupancyMap is empty and no approvals are needed.
-    """
     workbook = Workbook.from_xlsx(input_path) if input_path else Workbook.blank()
     occupancy = (
         OccupancyMap.from_original(Workbook.from_xlsx(original_path))
@@ -80,6 +77,10 @@ async def run(
 
     applied = 0
     pending: list[PendingApproval] = []
+    # (domain_action, db_row) pairs for pending actions from this turn.
+    # Kept alongside `pending` so the verifier can run on a clone with
+    # these applied and we can attribute findings back to their rows.
+    pending_pairs: list[tuple[AgentAction, Action]] = []
 
     for step in plan.steps:
         log.info("executor: step '%s'", step.title)
@@ -107,6 +108,7 @@ async def run(
                         reason=check.reason or "overwrite",
                     )
                 )
+                pending_pairs.append((action, row))
                 log.info("staged pending approval: %s", check.reason)
                 continue
 
@@ -123,17 +125,40 @@ async def run(
             applied += 1
         await db.commit()
 
-    log.info("verifier: syntactic pass")
-    syntactic = verifier.syntactic_issues(workbook)
-    log.info("verifier: %d syntactic issues", len(syntactic))
+    pending_domain = [dom for dom, _ in pending_pairs]
+    action_id_map = {id(dom): row.id for dom, row in pending_pairs}
+    rows_by_id = {row.id: row for _, row in pending_pairs}
 
-    log.info("verifier: semantic pass")
-    report = await verifier.verify_semantics(prompt, workbook)
+    log.info("verifier: running 5-level pipeline (pending=%d)", len(pending_domain))
+    report = await verifier.verify(
+        workbook, prompt=prompt, pending_actions=pending_domain
+    )
     log.info(
-        "verifier: %d semantic issues (confidence=%.2f)",
-        len(report.issues),
+        "verifier: %d findings (%d critical, confidence=%.2f)",
+        len(report.findings),
+        len(report.critical),
         report.confidence,
     )
+
+    # Attribute critical findings back to the pending actions whose cells
+    # they target, and append to the action's reasoning. Status does NOT
+    # change — verifier is informational for pending actions, not a gate.
+    attributions = verifier.attribute_to_actions(
+        report.critical, pending_domain, action_id_map
+    )
+    for action_id, findings in attributions.items():
+        # Different name from the `row` used earlier in the turn's audit
+        # loop so mypy can narrow Optional[Action] → Action cleanly.
+        attrib_row = rows_by_id.get(action_id)
+        if attrib_row is None:
+            continue
+        addendum = "\n".join(
+            f"[verifier {f.level.value}/{f.severity.value}] {f.message}"
+            for f in findings
+        )
+        attrib_row.reasoning = (attrib_row.reasoning or "") + "\n" + addendum
+    if attributions:
+        await db.commit()
 
     storage = get_storage()
     current_path = storage.local_path(session_id, "current.xlsx")
@@ -149,7 +174,6 @@ async def run(
         plan=plan,
         actions_applied=applied,
         pending_approvals=pending,
-        syntactic_issues=syntactic,
         verification=report,
         output_path=current_path,
     )

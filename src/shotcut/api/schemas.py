@@ -34,7 +34,9 @@ class PromptResponse(BaseModel):
     plan: Plan
     actions_applied: int
     pending_approvals: list[PendingApprovalOut]
-    syntactic_issues: list[dict[str, Any]]
+    # VerificationReport carries findings from all 5 levels (syntax /
+    # reference / cycle / numerical / semantic). The old separate
+    # `syntactic_issues` field folded in at Stage 4.
     verification: VerificationReport
     download_path: str
 

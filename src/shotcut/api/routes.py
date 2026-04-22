@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import uuid
 from pathlib import Path
 
@@ -145,7 +144,6 @@ async def prompt_session(
             )
             for p in result.pending_approvals
         ],
-        syntactic_issues=[dataclasses.asdict(i) for i in result.syntactic_issues],
         verification=result.verification,
         download_path=f"/sessions/{session_id}/workbook",
     )

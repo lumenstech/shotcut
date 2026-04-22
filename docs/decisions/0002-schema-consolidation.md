@@ -146,3 +146,32 @@ This stage establishes Alembic as the migration tool. `main.py`'s
 for empty databases — in production, `alembic upgrade head` runs first
 and `create_all` is a no-op. Subsequent stages' migrations live in
 `alembic/versions/` and are numbered in order (`0002_...`, `0003_...`).
+
+## Stage 4 addendum — cloning for pending-approval verification
+
+Stage 4's verifier must evaluate the workbook *as if* all
+`pending_approval` actions in the current turn were applied, without
+mutating the persisted workbook. Two viable shapes:
+
+1. **Cheap clone (adopted).** Serialize the current workbook to
+   `BytesIO`, deserialize into a fresh `Workbook`, apply each pending
+   action against the clone, run verifier levels over the clone, let
+   GC reclaim it at the end of the turn. Works today, no new API
+   surface; each verification pass costs one extra openpyxl
+   round-trip (tens of milliseconds for workbooks in the kilocell
+   range, which matches our target).
+
+2. **Copy-on-write context manager (Stage 6 upgrade).** Add
+   `Workbook.with_actions_applied(actions: list[Action]) -> Workbook`
+   as a context manager that materializes a shadow state only for
+   cells touched by the supplied actions, backed by the original
+   workbook for everything else. Stage 6's checkpointing / replay
+   wants this: replaying a turn's pending state against a large
+   historical workbook shouldn't pay a full clone cost every time,
+   and the shadow can be discarded atomically on session rollback.
+
+Decision: ship (1) in Stage 4. Note (2) here as the eventual Stage 6
+follow-up; it becomes worth implementing once checkpoint replay makes
+the clone cost visible in profiles. The verifier's public surface
+(`verify(workbook, pending_actions, ...)`) is stable across the
+upgrade — only the Workbook layer changes.

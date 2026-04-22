@@ -87,12 +87,14 @@ def _patch_agents(
     ) -> list[AgentAction]:
         return actions_to_emit
 
-    async def fake_verify_semantics(prompt: str, workbook: object) -> VerificationReport:
-        return VerificationReport(issues=[], confidence=1.0)
+    async def fake_verify(
+        workbook: object, *, prompt: str, pending_actions: object = None
+    ) -> VerificationReport:
+        return VerificationReport(findings=[], confidence=1.0)
 
     monkeypatch.setattr(planner, "plan", fake_plan)
     monkeypatch.setattr(executor, "execute", fake_execute)
-    monkeypatch.setattr(verifier, "verify_semantics", fake_verify_semantics)
+    monkeypatch.setattr(verifier, "verify", fake_verify)
 
 
 # ---------------------------------------------------------------------------
