@@ -6,8 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from shotcut.agents.planner import Plan
-from shotcut.agents.verifier import VerificationReport
 from shotcut.db.models import ActionStatus
 from shotcut.spreadsheet.parser import ParseMetadata
 
@@ -29,16 +27,16 @@ class PendingApprovalOut(BaseModel):
     reason: str
 
 
-class PromptResponse(BaseModel):
+class PromptAccepted(BaseModel):
+    """Stage 6: POST /prompt returns 202 + this envelope while the
+    durable orchestrator runs in the background. Clients subscribe to
+    `GET /sessions/{id}/events` for progress, then fetch the audit log
+    and workbook when state=done."""
+
     session_id: uuid.UUID
-    plan: Plan
-    actions_applied: int
-    pending_approvals: list[PendingApprovalOut]
-    # VerificationReport carries findings from all 5 levels (syntax /
-    # reference / cycle / numerical / semantic). The old separate
-    # `syntactic_issues` field folded in at Stage 4.
-    verification: VerificationReport
-    download_path: str
+    events_path: str
+    audit_path: str
+    workbook_path: str
 
 
 class ActionOut(BaseModel):

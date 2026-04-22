@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shotcut.agents import orchestrator
+from shotcut.agents import orchestrator as sync_orchestrator
 from shotcut.api.schemas import (
     ActionOut,
     ApprovalResponse,
     AuditResponse,
     BranchRequest,
     BranchResponse,
-    PendingApprovalOut,
+    PromptAccepted,
     PromptRequest,
-    PromptResponse,
     SessionCreateResponse,
     UndoResponse,
     UploadResponse,
@@ -27,9 +27,13 @@ from shotcut.audit import export as export_mod
 from shotcut.audit import replay as replay_mod
 from shotcut.audit import undo as undo_mod
 from shotcut.config import settings
-from shotcut.db.models import Action, ActionStatus
+from shotcut.db.models import Action, ActionStatus, OrchestratorStateEnum
 from shotcut.db.models import Session as SessionRow
 from shotcut.db.session import get_db
+from shotcut.orchestrator import checkpoint as checkpoint_mod
+from shotcut.orchestrator import durable as durable_mod
+from shotcut.orchestrator import events as events_mod
+from shotcut.orchestrator.events import ProgressEvent
 from shotcut.security.scan import scan_bytes
 from shotcut.spreadsheet.parser import parse as parse_workbook
 from shotcut.storage import get_storage
@@ -111,49 +115,75 @@ async def upload_workbook(
     )
 
 
-@router.post("/sessions/{session_id}/prompt", response_model=PromptResponse)
+@router.post(
+    "/sessions/{session_id}/prompt",
+    response_model=PromptAccepted,
+    status_code=202,
+)
 async def prompt_session(
     session_id: uuid.UUID,
     body: PromptRequest,
     db: AsyncSession = Depends(get_db),
-) -> PromptResponse:
+) -> PromptAccepted:
+    """Start a durable orchestrator run for `session_id`.
+
+    Returns 202 immediately — the run proceeds in a background task.
+    Clients subscribe to `GET /sessions/{id}/events` for progress and
+    fetch `/workbook`, `/audit` when state=done.
+    """
     session = await db.get(SessionRow, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
-    input_path = Path(session.workbook_path)
-    input_path_arg: Path | None = input_path if input_path.exists() else None
-    original_path_arg: Path | None = None
-    if session.original_workbook_path:
-        candidate = Path(session.original_workbook_path)
-        if candidate.exists():
-            original_path_arg = candidate
+    await durable_mod.start(db, session_id=session_id, prompt=body.prompt)
 
-    result = await orchestrator.run(
-        db,
+    return PromptAccepted(
         session_id=session_id,
-        prompt=body.prompt,
-        input_path=input_path_arg,
-        original_path=original_path_arg,
+        events_path=f"/sessions/{session_id}/events",
+        audit_path=f"/sessions/{session_id}/audit",
+        workbook_path=f"/sessions/{session_id}/workbook",
     )
 
-    return PromptResponse(
-        session_id=session_id,
-        plan=result.plan,
-        actions_applied=result.actions_applied,
-        pending_approvals=[
-            PendingApprovalOut(
-                action_id=p.action_id,
-                sheet=p.sheet,
-                target=p.target,
-                action_type=p.action_type,
-                reason=p.reason,
+
+@router.get("/sessions/{session_id}/events")
+async def stream_session_events(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Server-Sent Events stream of orchestrator progress.
+
+    Subscribes to the in-process event bus. If the session is already
+    in a terminal state when this endpoint is hit, emits one synthetic
+    event and closes so late subscribers still see completion.
+    """
+    session = await db.get(SessionRow, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    state_row = await checkpoint_mod.load(db, session_id=session_id)
+    terminal_state: OrchestratorStateEnum | None = None
+    terminal_error: str | None = None
+    if state_row is not None and state_row.state in (
+        OrchestratorStateEnum.DONE,
+        OrchestratorStateEnum.FAILED,
+    ):
+        terminal_state = state_row.state
+        terminal_error = state_row.error
+
+    async def generator() -> AsyncIterator[str]:
+        if terminal_state is not None:
+            synthetic = ProgressEvent(
+                session_id=session_id,
+                state=terminal_state,
+                message=terminal_error or "complete",
+                percent=1.0,
             )
-            for p in result.pending_approvals
-        ],
-        verification=result.verification,
-        download_path=f"/sessions/{session_id}/workbook",
-    )
+            yield f"data: {synthetic.model_dump_json()}\n\n"
+            return
+        async for event in events_mod.subscribe(session_id):
+            yield f"data: {event.model_dump_json()}\n\n"
+
+    return StreamingResponse(generator(), media_type="text/event-stream")
 
 
 @router.post(
@@ -175,7 +205,7 @@ async def approve_action(
             detail=f"action is {row.status.value}, not pending_approval",
         )
 
-    result = await orchestrator.apply_pending_action(db, action_row=row)
+    result = await sync_orchestrator.apply_pending_action(db, action_row=row)
     return ApprovalResponse(
         action_id=row.id,
         status=row.status,

@@ -102,6 +102,25 @@ class Workbook:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._wb.save(path)
 
+    def with_actions_applied(
+        self, actions: "list[Action]"
+    ) -> "_ActionsAppliedContext":
+        """Return a context manager yielding a clone with `actions` applied.
+
+        Leaves `self` untouched. The clone is created via full BytesIO
+        round-trip in the Stage 6 MVP — same cost as Stage 4's verifier
+        clone. The public shape is stable across an eventual
+        copy-on-write upgrade (see
+        docs/decisions/0003-durable-execution.md).
+
+        Usage:
+            with workbook.with_actions_applied(pending) as clone:
+                # evaluate, diff, etc. against `clone`
+                ...
+            # `self` is unchanged here; clone is GC-reclaimed on exit.
+        """
+        return _ActionsAppliedContext(self, actions)
+
     def close(self) -> None:
         """Release openpyxl's resources, in particular the `vba_archive`
         ZipFile whose `__del__` path is known to fire unraisable exceptions
@@ -278,3 +297,41 @@ class Workbook:
             return str(get_column_letter(min_col))
         col, _ = coordinate_from_string(target)
         return str(col)
+
+
+class _ActionsAppliedContext:
+    """Context manager for `Workbook.with_actions_applied`.
+
+    Produces a fresh Workbook (via BytesIO round-trip) with `actions`
+    applied, yields it, and closes it on exit. The underlying Workbook
+    is never mutated.
+    """
+
+    def __init__(self, source: Workbook, actions: list[Action]) -> None:
+        self._source = source
+        self._actions = actions
+        self._clone: Workbook | None = None
+
+    def __enter__(self) -> Workbook:
+        import io
+
+        buffer = io.BytesIO()
+        self._source.raw.save(buffer)
+        buffer.seek(0)
+        pyxl = load_workbook(buffer, data_only=False, keep_vba=True, keep_links=True)
+        _release_empty_vba_archive(pyxl)
+        clone = Workbook(pyxl)
+        for action in self._actions:
+            clone.apply(action)
+        self._clone = clone
+        return clone
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        if self._clone is not None:
+            self._clone.close()
+            self._clone = None

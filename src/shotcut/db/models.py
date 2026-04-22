@@ -32,6 +32,22 @@ class ActionStatus(str, enum.Enum):
     UNDONE = "undone"
 
 
+class OrchestratorStateEnum(str, enum.Enum):
+    """Stage 6 durable-execution state machine.
+
+    PLANNING → EXECUTING → VERIFYING → DONE
+        └────────┴────────────┴──► FAILED
+
+    See docs/decisions/0003-durable-execution.md.
+    """
+
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    VERIFYING = "verifying"
+    DONE = "done"
+    FAILED = "failed"
+
+
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -145,4 +161,49 @@ class SessionBranch(Base):
     branched_at_sequence: Mapped[int] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class OrchestratorState(Base):
+    """Per-session durable state for the Stage 6 orchestrator.
+
+    One row per active session. Survives worker restarts — on boot the
+    app scans this table for non-terminal states and resumes them.
+    See docs/decisions/0003-durable-execution.md for the state machine
+    and checkpoint semantics.
+    """
+
+    __tablename__ = "orchestrator_states"
+
+    # One-to-one with sessions: the session id is the natural primary key.
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    state: Mapped[OrchestratorStateEnum] = mapped_column(
+        Enum(
+            OrchestratorStateEnum,
+            name="orchestrator_state",
+            values_callable=lambda e: [x.value for x in e],
+        ),
+        index=True,
+    )
+    # The original user prompt — preserved so resume can replay planning
+    # if needed. Plans are currently cached on successful PLANNING, so
+    # resume after that state is cheap.
+    prompt: Mapped[str] = mapped_column(Text)
+    # Serialized Plan (from agents.planner.Plan.model_dump()). None until
+    # the planning step has produced one.
+    plan: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Next plan-step index to execute. After step K completes, this is
+    # incremented to K+1 and the row is committed.
+    current_step_index: Mapped[int] = mapped_column(default=0, server_default="0")
+    # Populated when state=FAILED; stays null on happy-path completion.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
