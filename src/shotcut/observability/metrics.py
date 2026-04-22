@@ -70,6 +70,16 @@ LLM_COST_USD_TOTAL = Counter(
     registry=REGISTRY,
 )
 
+LLM_UNKNOWN_MODEL_TOTAL = Counter(
+    "shotcut_llm_unknown_model_total",
+    "Fallback-to-Opus-4.7-pricing events. Non-zero = a model string is "
+    "missing from the pricing table; cost rollups for that model are "
+    "conservative (never under-reported) but not accurate. Alert if this "
+    "counter moves during a deploy — usually indicates a model typo.",
+    labelnames=("model",),
+    registry=REGISTRY,
+)
+
 
 def prometheus_exposition() -> bytes:
     """Serialize the current registry snapshot in the Prometheus text
@@ -86,7 +96,7 @@ def reset_metrics() -> None:
     """
     global REGISTRY, REQUESTS_TOTAL, REQUEST_DURATION_SECONDS
     global AGENT_STEP_DURATION_SECONDS, AGENT_ERRORS_TOTAL
-    global LLM_TOKENS_TOTAL, LLM_COST_USD_TOTAL
+    global LLM_TOKENS_TOTAL, LLM_COST_USD_TOTAL, LLM_UNKNOWN_MODEL_TOTAL
 
     REGISTRY = CollectorRegistry()
     REQUESTS_TOTAL = Counter(
@@ -123,5 +133,11 @@ def reset_metrics() -> None:
         "shotcut_llm_cost_usd_total",
         "USD cost of Anthropic calls, rolled up per tenant + model.",
         labelnames=("model", "tenant_id"),
+        registry=REGISTRY,
+    )
+    LLM_UNKNOWN_MODEL_TOTAL = Counter(
+        "shotcut_llm_unknown_model_total",
+        "Fallback-to-Opus-4.7-pricing events. Alert if this moves on a deploy.",
+        labelnames=("model",),
         registry=REGISTRY,
     )

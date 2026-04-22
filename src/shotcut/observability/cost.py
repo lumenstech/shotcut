@@ -53,7 +53,13 @@ _FALLBACK = _PRICING["claude-opus-4-7"]
 
 def pricing_for(model: str) -> ModelPricing:
     """Return the pricing for `model`, falling back to Opus 4.7 rates
-    (the most expensive current Claude) on miss."""
+    (the most expensive current Claude) on miss.
+
+    On fallback, increments `shotcut_llm_unknown_model_total{model}` so
+    operators can alert on it: conservative pricing means costs never
+    under-report, but a silent model-string typo would produce
+    plausible-but-wrong numbers. The counter makes the event queryable.
+    """
     # Strip a trailing date suffix (`claude-haiku-4-5-20251001` →
     # `claude-haiku-4-5`). Suffixes are 8-digit dates or the literal
     # `-fast`; neither appears in our canonical keys.
@@ -61,6 +67,12 @@ def pricing_for(model: str) -> ModelPricing:
     if canonical in _PRICING:
         return _PRICING[canonical]
     log.debug("cost: no pricing for model %r; using Opus 4.7 fallback", model)
+    # Attribute access (not `from ... import`) so reset_metrics()'s
+    # counter rebinding is respected — `from` creates a local name
+    # that would freeze on the pre-reset Counter instance.
+    from shotcut.observability import metrics
+
+    metrics.LLM_UNKNOWN_MODEL_TOTAL.labels(model=model).inc()
     return _FALLBACK
 
 

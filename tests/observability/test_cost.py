@@ -41,6 +41,54 @@ def test_unknown_model_falls_back_to_opus_4_7() -> None:
     assert p.output_per_mtok == 25.0
 
 
+def test_unknown_model_increments_counter() -> None:
+    """Silent fallback events are queryable via the
+    `shotcut_llm_unknown_model_total{model}` counter so operators can
+    alert on a model-string typo that would otherwise produce
+    plausible-but-wrong cost rollups."""
+    from shotcut.observability import metrics
+
+    metrics.reset_metrics()
+    try:
+        pricing_for("claude-made-up-model-99-9")
+        pricing_for("claude-made-up-model-99-9")
+        pricing_for("claude-typo-4-X")
+
+        text = metrics.prometheus_exposition().decode()
+        assert (
+            'shotcut_llm_unknown_model_total{model="claude-made-up-model-99-9"} 2.0'
+            in text
+        )
+        assert (
+            'shotcut_llm_unknown_model_total{model="claude-typo-4-X"} 1.0' in text
+        )
+    finally:
+        metrics.reset_metrics()
+
+
+def test_known_model_does_not_increment_counter() -> None:
+    """Canonical + date-suffixed known models both hit the cache path
+    and leave the unknown-model counter at zero."""
+    from shotcut.observability import metrics
+
+    metrics.reset_metrics()
+    try:
+        pricing_for("claude-opus-4-7")
+        pricing_for("claude-sonnet-4-6")
+        pricing_for("claude-haiku-4-5-20251001")  # date-suffixed
+
+        text = metrics.prometheus_exposition().decode()
+        # The counter family has zero samples when nothing incremented,
+        # so the counter prefix may not appear at all. Either way, no
+        # samples with nonzero values.
+        lines = [line for line in text.splitlines()
+                 if line.startswith("shotcut_llm_unknown_model_total{")]
+        for line in lines:
+            assert line.endswith(" 0.0"), f"unexpected increment: {line}"
+    finally:
+        metrics.reset_metrics()
+
+
 def test_cached_rates_derive_from_input() -> None:
     p = pricing_for("claude-opus-4-7")
     assert p.cached_read_per_mtok == pytest.approx(0.5)  # 10% of $5
