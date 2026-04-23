@@ -202,8 +202,48 @@ def test_evaluate_reports_structured_message() -> None:
     )
     report = evaluate(golden=golden, spreadsheetbench=sb, baseline=baseline)
     assert not report.passed
-    assert "golden regressions" in report.message
+    assert "golden failed" in report.message
     assert "SpreadsheetBench" in report.message
+
+
+def test_evaluate_splits_errored_from_failed_in_message() -> None:
+    """Triage distinguishability: a cassette-missing / producer-raised
+    case is labeled `errored`, a scorer-diff case is labeled `failed`.
+    The gate message must keep them in separate buckets so the triager
+    picks the right path without reading every message body."""
+    baseline = Baseline(
+        golden={"e": "passed", "f": "passed"},
+    )
+    golden = SuiteResult.from_cases(
+        suite="golden",
+        cases=[
+            _ok_case("e", verdict="errored"),  # e.g. cassette missing
+            _ok_case("f", verdict="failed"),   # scorer diff
+        ],
+    )
+    report = evaluate(golden=golden, baseline=baseline)
+
+    assert "golden errored (1): e" in report.message
+    assert "golden failed (1): f" in report.message
+    # The old conflating phrase is gone.
+    assert "golden regressions" not in report.message
+
+
+def test_evaluate_errored_only_message_shape() -> None:
+    """A run where every golden failure is an `errored` verdict doesn't
+    mention `failed` — avoids misleading triagers about the nature of
+    the regression."""
+    baseline = Baseline(golden={"x": "passed", "y": "passed"})
+    golden = SuiteResult.from_cases(
+        suite="golden",
+        cases=[
+            _ok_case("x", verdict="errored"),
+            _ok_case("y", verdict="errored"),
+        ],
+    )
+    report = evaluate(golden=golden, baseline=baseline)
+    assert "golden errored (2)" in report.message
+    assert "golden failed" not in report.message
 
 
 def test_enforce_raises_golden_first() -> None:

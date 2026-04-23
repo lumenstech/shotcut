@@ -64,3 +64,32 @@ def test_golden_run_is_deterministic() -> None:
         line for line in second.stdout.splitlines() if "trace" not in line
     )
     assert first_sans == second_sans
+
+
+def test_missing_cassette_surfaces_as_ERRORED_prefix(
+    monkeypatch, capsys
+) -> None:
+    """A golden case without a cassette produces a verdict=errored
+    CaseResult and the CLI prefixes its stderr line with ERRORED, not
+    FAILED — so a triager can distinguish schema/scaffolding breakage
+    from a real workbook regression at a glance."""
+    import evals.cli as cli_module
+    from evals.recording import CassetteMissing
+
+    def _always_missing(case_id: str):
+        raise CassetteMissing(f"no cassette for {case_id!r}")
+
+    monkeypatch.setattr(cli_module, "recorded_trace_producer", _always_missing)
+    monkeypatch.setattr(sys, "argv", ["evals.cli", "golden", "--gate"])
+
+    exit_code = cli_module.main()
+    captured = capsys.readouterr()
+
+    assert exit_code == 1, (
+        f"gate should fail on missing cassettes; stdout={captured.out!r}"
+    )
+    # Per-case lines use ERRORED, not FAILED.
+    assert "ERRORED sum_of_column" in captured.err
+    assert "FAILED sum_of_column" not in captured.err
+    # Summary line also shows the errored-bucket count.
+    assert "golden errored (3)" in captured.out

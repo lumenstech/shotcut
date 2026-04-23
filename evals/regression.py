@@ -132,13 +132,25 @@ def evaluate(
     passed = not golden_failures and sb_passed
     messages: list[str] = []
     if golden_failures:
-        names = ", ".join(c.case_id for c in golden_failures[:5])
-        more = (
-            f" and {len(golden_failures) - 5} more"
-            if len(golden_failures) > 5
-            else ""
-        )
-        messages.append(f"golden regressions: {names}{more}")
+        # Split "cassette/producer broke" (errored) from "scorer saw a
+        # diff" (failed) in the summary so triage doesn't need to read
+        # every message body to bucket the failures.
+        errored = [c for c in golden_failures if c.verdict == "errored"]
+        failed = [c for c in golden_failures if c.verdict == "failed"]
+        if errored:
+            messages.append(
+                f"golden errored ({len(errored)}): "
+                + _sample_case_ids(errored)
+            )
+        if failed:
+            messages.append(
+                f"golden failed ({len(failed)}): "
+                + _sample_case_ids(failed)
+            )
+        # A golden_failure can also be synthesized by check_golden when
+        # a case is missing from the current run (verdict="errored"
+        # with a synthetic message). Already covered by the errored
+        # bucket above — no separate branch needed.
     if not sb_passed:
         messages.append(
             "SpreadsheetBench pass rate "
@@ -153,6 +165,12 @@ def evaluate(
         passed=passed,
         message=message,
     )
+
+
+def _sample_case_ids(cases: list[CaseResult], *, limit: int = 5) -> str:
+    names = ", ".join(c.case_id for c in cases[:limit])
+    more = f" and {len(cases) - limit} more" if len(cases) > limit else ""
+    return f"{names}{more}"
 
 
 def enforce(report: GateReport) -> None:

@@ -171,3 +171,44 @@ with it. Workflow:
 We don't ship tooling for (1)-(3) in this follow-up; cassettes are
 small enough today to hand-craft, and the failure mode (scorer diff
 with clear location) points at what needs updating.
+
+### Gate output distinguishes triage paths
+
+The CI stderr output and `GateReport.message` use different prefixes
+for different failure classes so the triager isn't forced to read
+every message body:
+
+- `ERRORED` — the case didn't run to completion. Usually means a
+  cassette is missing, a Pydantic schema changed and rejected a
+  recording at load, or the producer raised. Triage path: fix the
+  scaffolding.
+- `FAILED` — the case ran and the scorer reported diffs. Triage
+  path: look at the diffs, decide whether it's a real regression
+  or a cassette needing re-recording.
+- `golden errored (N): …` vs `golden failed (N): …` in the summary
+  line follows the same split.
+
+### Deferred: cassette-rot detector
+
+Cassettes are committed artifacts pinning executor behavior at
+recording time. If `Workbook.apply` evolves in a non-breaking but
+semantically-drifting way (e.g. a WriteFormula ordering change that
+doesn't fail the scorer but changes how downstream cells settle),
+the diff is visible in the PR that changed `apply` but invisible
+afterward — future readers of the cassette can't tell which commit
+it was recorded against.
+
+Fix (deferred, not shipped in this follow-up): add a
+`recorded_against_commit: str` field to the Cassette schema +
+`recorded_at: datetime`. `load_cassette` logs (doesn't enforce)
+staleness. If a cassette's recorded commit is older than, say, the
+oldest surviving commit that touched `spreadsheet/workbook.py` or
+`spreadsheet/actions.py`, the CI job prints a warning. This is a
+hygiene signal, not a gate — rotting cassettes that still pass the
+scorer are valid. We just want the age to be visible.
+
+Not shipped now because (a) without a live-recording tool, updating
+the recorded_against_commit field by hand on every cassette edit is
+toil that invites staleness-by-laziness, and (b) the signal is
+low-urgency — real `apply` regressions will surface as scorer diffs,
+which we already catch. Revisit when live-recording tooling lands.

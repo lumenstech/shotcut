@@ -138,16 +138,39 @@ def main() -> int:
         print(f"gate: {report.message}")
 
     if args.gate and not report.passed:
-        # Emit failing case details to stderr for human diagnosis.
+        # Emit failing case details to stderr with per-verdict prefixes
+        # so a triager can distinguish at a glance:
+        #   ERRORED — the case didn't run to completion (cassette
+        #             missing, producer raised, etc.). Different triage
+        #             path: likely a schema or scaffolding issue.
+        #   FAILED  — the case ran and the scorer reported diffs.
+        #             Different triage path: real workbook regression.
+        #   MISSING — baseline required it but current run never
+        #             produced any CaseResult for it at all.
         for case in (result.cases if result else []):
-            if case.verdict != "passed":
-                print(
-                    f"  FAILED {case.case_id}: {case.message or '(no message)'} "
-                    f"[trace={case.langfuse_trace_id}]",
-                    file=sys.stderr,
-                )
+            prefix = _triage_prefix(case.verdict)
+            if prefix is None:
+                continue
+            print(
+                f"  {prefix} {case.case_id}: "
+                f"{case.message or '(no message)'} "
+                f"[trace={case.langfuse_trace_id}]",
+                file=sys.stderr,
+            )
         return 1
     return 0
+
+
+def _triage_prefix(verdict: str) -> str | None:
+    """Map CaseResult.verdict → a scannable stderr prefix.
+
+    Returns None for `passed` (nothing to log for that case).
+    """
+    if verdict == "passed":
+        return None
+    if verdict == "errored":
+        return "ERRORED"
+    return "FAILED"
 
 
 if __name__ == "__main__":

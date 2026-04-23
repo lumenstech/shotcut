@@ -53,7 +53,14 @@ def _multi_sheet_total() -> Workbook:
         # Leave the default "Sheet" in place. Our Action vocabulary has
         # no RemoveSheet, so a real agent working from blank would land
         # the orphan default sheet alongside Inputs + Model. Expected
-        # matches that reality — updating when RemoveSheet ships.
+        # matches that reality.
+        #
+        # TODO(RemoveSheet): when the RemoveSheet action ships, drop the
+        # orphan "Sheet" from the expected workbook AND from the
+        # cassette at evals/recording/cassettes/multi_sheet_total.json.
+        # The two must move together — see the "Stage 10 follow-up"
+        # section in docs/decisions/0007-eval-suite.md for the
+        # cassette-vs-expected alignment invariant.
         inputs = wb.create_sheet("Inputs")
         inputs["A1"] = 1000
         inputs["A2"] = 500
